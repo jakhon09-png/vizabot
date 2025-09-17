@@ -1,6 +1,1 @@
 python-telegram-bot[webhooks]==20.8
-requests
-python-dotenv
-deep-translator
-google-generativeai
-apscheduler
