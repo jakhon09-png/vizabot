@@ -14,12 +14,14 @@ import google.generativeai as genai
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
 from deep_translator import GoogleTranslator
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 # .env yuklash
 load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 WEATHER_API_KEY = os.getenv("WEATHER_API_KEY")
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
 if not TELEGRAM_TOKEN or not GEMINI_API_KEY:
     print("Xato: TELEGRAM_TOKEN yoki GEMINI_API_KEY topilmadi!")
@@ -60,40 +62,26 @@ WEATHER_CONDITIONS = {
     "light rain": "yengil yomg‘ir",
     "moderate rain": "o‘rtacha yomg‘ir",
     "heavy intensity rain": "kuchli yomg‘ir",
-    "very heavy rain": "juda kuchli yomg‘ir",
-    "extreme rain": "o‘ta kuchli yomg‘ir",
     "rain": "yomg‘ir",
-    "freezing rain": "muzlab tushadigan yomg‘ir",
-    "light snow": "yengil qor",
     "snow": "qor",
-    "heavy snow": "qalin qor",
-    "sleet": "yomg‘ir-qor",
-    "light shower sleet": "yengil yomg‘ir-qor",
-    "shower sleet": "yomg‘ir-qor yog‘ishi",
-    "light rain and snow": "yengil yomg‘ir-qor",
-    "rain and snow": "yomg‘ir-qor aralash",
-    "light shower snow": "yengil qor yog‘ishi",
-    "shower snow": "qor yog‘ishi",
-    "heavy shower snow": "kuchli qor yog‘ishi",
-    "thunderstorm": "momaqaldiroq",
-    "thunderstorm with rain": "momaqaldiroq va yomg‘ir",
-    "thunderstorm with heavy rain": "momaqaldiroq va kuchli yomg‘ir",
-    "thunderstorm with light rain": "momaqaldiroq va yengil yomg‘ir",
-    "thunderstorm with drizzle": "momaqaldiroq va mayda yomg‘ir",
-    "thunderstorm with snow": "momaqaldiroq va qor",
     "mist": "tuman",
-    "smoke": "tutun",
-    "haze": "xira havo",
+    "thunderstorm": "momaqaldiroq",
     "fog": "tuman",
-    "sand": "qumli bo‘ron",
+    "haze": "xira havo",
     "dust": "chang",
-    "ash": "vulkan kul",
-    "squall": "kuchli shamol",
+    "sand": "qumli bo‘ron",
     "tornado": "tornado"
 }
 
+# --- Foydalanuvchilarni saqlash ---
+def add_user(user_id, context):
+    users = context.bot_data.get("users", set())
+    users.add(user_id)
+    context.bot_data["users"] = users
+
 # ---- Start va Help ----
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    add_user(update.effective_user.id, context)
     await update.message.reply_text("Salom! Men AI botman 🤖. /help buyrug‘ini yozib ko‘ring.")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -104,6 +92,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/crypto - Kripto tanlab, narxini olish\n"
         "/translate - Tilni tanlab, tarjima qilish\n"
         "/currency - Bugungi valyuta kurslari (CBU)\n"
+        "/broadcast - (Admin) Hammaga xabar yuborish\n"
+        "/report - (Admin) So‘rovlar haqida hisobot\n"
         "🤖 Boshqa xabar yuborsangiz — Gemini AI javob beradi\n"
     )
     await update.message.reply_text(text)
@@ -136,7 +126,6 @@ async def weather_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         temp = res["main"]["temp"]
         desc = res["weather"][0]["description"].lower()
-
         uz_desc = WEATHER_CONDITIONS.get(desc, desc)
 
         await query.edit_message_text(f"🌤 {city} ob-havosi:\n{temp}°C, {uz_desc}")
@@ -182,7 +171,6 @@ async def lang_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def translate_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if "target_lang" not in context.user_data:
-        # agar translate rejimida bo‘lmasa, AI ishlaydi
         await handle_ai_message(update, context)
         return
 
@@ -216,21 +204,78 @@ async def currency(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ---- GEMINI AI ----
 async def handle_ai_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    add_user(user_id, context)
+
+    # Log qo‘shish
+    logs = context.bot_data.get("logs", [])
+    logs.append((datetime.now().strftime("%Y-%m-%d %H:%M"), user_id, update.message.text))
+    context.bot_data["logs"] = logs[-1000:]
+
+    # Antispam
     last_message_time = context.user_data.get("last_message_time", None)
     if last_message_time and datetime.now() < last_message_time + timedelta(seconds=5):
         await update.message.reply_text("⏳ Iltimos, biroz kuting!")
         return
-
     context.user_data["last_message_time"] = datetime.now()
-    user_message = update.message.text
 
     try:
-        response = await asyncio.to_thread(model.generate_content, user_message)
+        response = await asyncio.to_thread(model.generate_content, update.message.text)
         ai_response = response.text
     except Exception as e:
         ai_response = f"Xatolik: {str(e)}"
 
     await update.message.reply_text(ai_response)
+
+# ---- ADMIN funksiyalari ----
+async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ Sizga ruxsat yo‘q.")
+        return
+    if not context.args:
+        await update.message.reply_text("Foydalanish: /broadcast Xabar matni")
+        return
+
+    text = " ".join(context.args)
+    users = context.bot_data.get("users", set())
+    if not users:
+        await update.message.reply_text("📭 Foydalanuvchilar ro‘yxati bo‘sh.")
+        return
+
+    sent, failed = 0, 0
+    for uid in users:
+        try:
+            await context.bot.send_message(uid, f"📢 Admin xabari:\n\n{text}")
+            sent += 1
+        except:
+            failed += 1
+
+    await update.message.reply_text(f"✅ Yuborildi: {sent} ta\n❌ Yuborilmadi: {failed} ta")
+
+async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ Sizga ruxsat yo‘q.")
+        return
+    await send_report(context)
+
+async def send_report(context: ContextTypes.DEFAULT_TYPE):
+    logs = context.bot_data.get("logs", [])
+    users = context.bot_data.get("users", set())
+
+    if not logs:
+        await context.bot.send_message(ADMIN_ID, "📊 Bugun hech qanday so‘rov bo‘lmadi.")
+        return
+
+    msg = (
+        f"📊 Kunlik hisobot\n\n"
+        f"👥 Foydalanuvchilar soni: {len(users)}\n"
+        f"💬 Bugungi so‘rovlar soni: {len(logs)}\n\n"
+        "📝 Oxirgi 5 ta so‘rov:\n"
+    )
+    for time, uid, text in logs[-5:]:
+        msg += f"🕒 {time} | 👤 {uid}\n💬 {text}\n\n"
+
+    await context.bot.send_message(ADMIN_ID, msg)
 
 # ---- MAIN ----
 def main():
@@ -243,14 +288,21 @@ def main():
     app.add_handler(CommandHandler("crypto", crypto_start))
     app.add_handler(CommandHandler("translate", translate_start))
     app.add_handler(CommandHandler("currency", currency))
+    app.add_handler(CommandHandler("broadcast", broadcast))
+    app.add_handler(CommandHandler("report", report))
 
     # Tugma handlerlar
     app.add_handler(CallbackQueryHandler(weather_button, pattern="^weather_"))
     app.add_handler(CallbackQueryHandler(crypto_button, pattern="^crypto_"))
     app.add_handler(CallbackQueryHandler(lang_button, pattern="^lang_"))
 
-    # Matn handler (tarjima yoki AI)
+    # Matn handler
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, translate_message))
+
+    # --- Scheduler (23:59 da hisobot yuboradi) ---
+    scheduler = AsyncIOScheduler(timezone="Asia/Tashkent")
+    scheduler.add_job(send_report, "cron", hour=23, minute=59, args=[app.bot])
+    scheduler.start()
 
     # Webhook (Render uchun)
     port = int(os.environ.get("PORT", 8443))
