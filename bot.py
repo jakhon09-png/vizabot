@@ -92,11 +92,23 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/crypto - Kripto tanlab, narxini olish\n"
         "/translate - Tilni tanlab, tarjima qilish\n"
         "/currency - Bugungi valyuta kurslari (CBU)\n"
-        "/broadcast - (Admin) Hammaga xabar yuborish\n"
-        "/report - (Admin) So‘rovlar haqida hisobot\n"
         "🤖 Boshqa xabar yuborsangiz — Gemini AI javob beradi\n"
     )
+
+    # Faqat admin uchun qo'shimcha buyruqlar
+    if update.effective_user.id == ADMIN_ID:
+        text += (
+            "\n--- 🛠 Admin komandalar ---\n"
+            "/broadcast - Hammaga xabar yuborish\n"
+            "/report - So‘rovlar haqida hisobot\n"
+            "/myid - O‘z ID’ingizni bilish\n"
+        )
+
     await update.message.reply_text(text)
+
+# ---- My ID ----
+async def myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(f"Sizning ID: {update.effective_user.id}")
 
 # ---- WEATHER ----
 async def weather_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -230,7 +242,7 @@ async def handle_ai_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---- ADMIN funksiyalari ----
 async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("❌ Sizga ruxsat yo‘q.")
+        await update.message.reply_text("❌ Siz admin emassiz.")
         return
     if not context.args:
         await update.message.reply_text("Foydalanish: /broadcast Xabar matni")
@@ -239,7 +251,7 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = " ".join(context.args)
     users = context.bot_data.get("users", set())
     if not users:
-        await update.message.reply_text("📭 Foydalanuvchilar ro‘yxati bo‘sh.")
+        await update.message.reply_text("📭 Hali foydalanuvchi yo‘q.")
         return
 
     sent, failed = 0, 0
@@ -247,14 +259,14 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             await context.bot.send_message(uid, f"📢 Admin xabari:\n\n{text}")
             sent += 1
-        except:
+        except Exception:
             failed += 1
 
-    await update.message.reply_text(f"✅ Yuborildi: {sent} ta\n❌ Yuborilmadi: {failed} ta")
+    await update.message.reply_text(f"✅ Yuborildi: {sent} ta\n❌ Xato: {failed} ta")
 
 async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("❌ Sizga ruxsat yo‘q.")
+        await update.message.reply_text("❌ Siz admin emassiz.")
         return
     await send_report(context)
 
@@ -269,7 +281,7 @@ async def send_report(context: ContextTypes.DEFAULT_TYPE):
     msg = (
         f"📊 Kunlik hisobot\n\n"
         f"👥 Foydalanuvchilar soni: {len(users)}\n"
-        f"💬 Bugungi so‘rovlar soni: {len(logs)}\n\n"
+        f"💬 So‘rovlar soni: {len(logs)}\n\n"
         "📝 Oxirgi 5 ta so‘rov:\n"
     )
     for time, uid, text in logs[-5:]:
@@ -290,6 +302,7 @@ def main():
     app.add_handler(CommandHandler("currency", currency))
     app.add_handler(CommandHandler("broadcast", broadcast))
     app.add_handler(CommandHandler("report", report))
+    app.add_handler(CommandHandler("myid", myid))
 
     # Tugma handlerlar
     app.add_handler(CallbackQueryHandler(weather_button, pattern="^weather_"))
