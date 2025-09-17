@@ -103,6 +103,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/weather - Shaharni tanlab, ob-havo olish\n"
         "/crypto - Kripto tanlab, narxini olish\n"
         "/translate - Tilni tanlab, tarjima qilish\n"
+        "/currency - Bugungi valyuta kurslari (CBU)\n"
         "🤖 Boshqa xabar yuborsangiz — Gemini AI javob beradi\n"
     )
     await update.message.reply_text(text)
@@ -136,7 +137,6 @@ async def weather_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         temp = res["main"]["temp"]
         desc = res["weather"][0]["description"].lower()
 
-        # O‘zbekcha tarjima
         uz_desc = WEATHER_CONDITIONS.get(desc, desc)
 
         await query.edit_message_text(f"🌤 {city} ob-havosi:\n{temp}°C, {uz_desc}")
@@ -191,7 +191,26 @@ async def translate_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         translated = GoogleTranslator(source="auto", target=lang).translate(text)
         await update.message.reply_text(f"🔤 Tarjima ({lang}): {translated}")
-        del context.user_data["target_lang"]  # keyingi safar qayta tanlashi uchun
+        del context.user_data["target_lang"]
+    except Exception as e:
+        await update.message.reply_text(f"Xatolik: {str(e)}")
+
+# ---- CURRENCY ----
+async def currency(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    url = "https://cbu.uz/oz/arkhiv-kursov-valyut/json/"
+    try:
+        res = requests.get(url).json()
+        if not res:
+            await update.message.reply_text("❌ Valyuta kurslari topilmadi.")
+            return
+
+        selected = [c for c in res if c["Ccy"] in ["USD", "EUR", "RUB"]]
+
+        text = "💱 Bugungi valyuta kurslari (CBU):\n\n"
+        for c in selected:
+            text += f"1 {c['Ccy']} = {c['Rate']} so‘m\n"
+
+        await update.message.reply_text(text)
     except Exception as e:
         await update.message.reply_text(f"Xatolik: {str(e)}")
 
@@ -223,6 +242,7 @@ def main():
     app.add_handler(CommandHandler("weather", weather_start))
     app.add_handler(CommandHandler("crypto", crypto_start))
     app.add_handler(CommandHandler("translate", translate_start))
+    app.add_handler(CommandHandler("currency", currency))
 
     # Tugma handlerlar
     app.add_handler(CallbackQueryHandler(weather_button, pattern="^weather_"))
