@@ -1,11 +1,12 @@
 import os
 import asyncio
 import requests
-from telegram import Update
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
+    CallbackQueryHandler,
     ContextTypes,
     filters,
 )
@@ -34,14 +35,31 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Salom! Men AI botman 🤖. /help buyrug‘ini yozib ko‘ring.")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [InlineKeyboardButton("🌤 Ob-havo", callback_data="weather")],
+        [InlineKeyboardButton("💰 Kripto", callback_data="crypto")],
+        [InlineKeyboardButton("🔤 Tarjima", callback_data="translate")],
+        [InlineKeyboardButton("📝 Tarix", callback_data="history")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
     await update.message.reply_text(
-        "/start - Botni ishga tushirish\n"
-        "/help - Yordam\n"
-        "/weather <shahar> - Ob-havo ma’lumoti\n"
-        "/crypto <coin> - Kripto narxi (masalan: bitcoin, ethereum)\n"
-        "/translate <til_kodi> <matn> - Matnni boshqa tilga tarjima qilish (masalan: /translate en Salom)\n"
-        "/history - So‘nggi 5 ta savol va javobni ko‘rsatadi\n"
+        "Quyidagi xizmatlardan birini tanlang:",
+        reply_markup=reply_markup
     )
+
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "weather":
+        await query.edit_message_text("🌤 Ob-havo uchun: `/weather <shahar>` yozing.")
+    elif query.data == "crypto":
+        await query.edit_message_text("💰 Kripto uchun: `/crypto <coin>` yozing.")
+    elif query.data == "translate":
+        await query.edit_message_text("🔤 Tarjima uchun: `/translate <til_kodi> <matn>` yozing.")
+    elif query.data == "history":
+        await query.edit_message_text("📝 Tarixni ko‘rish uchun: `/history` buyrug‘ini bosing.")
 
 async def weather(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not WEATHER_API_KEY:
@@ -108,7 +126,7 @@ async def history(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     msg = "📝 So‘nggi 5 ta savol va javob:\n\n"
     for i, (q, a) in enumerate(history_list[-5:], start=1):
-        msg += f"{i}. ❓ {q}\n➡️ {a[:100]}...\n\n"  # qisqa chiqaramiz
+        msg += f"{i}. ❓ {q}\n➡️ {a[:100]}...\n\n"
     await update.message.reply_text(msg)
 
 # ---- Asosiy AI chat handler ----
@@ -127,10 +145,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         ai_response = f"Xatolik: {str(e)}"
 
-    # Tarixni saqlash
     history_list = context.user_data.get("history", [])
     history_list.append((user_message, ai_response))
-    context.user_data["history"] = history_list[-10:]  # faqat oxirgi 10 ta
+    context.user_data["history"] = history_list[-10:]
 
     await update.message.reply_text(ai_response)
 
@@ -144,6 +161,7 @@ def main():
     app.add_handler(CommandHandler("crypto", crypto))
     app.add_handler(CommandHandler("translate", translate))
     app.add_handler(CommandHandler("history", history))
+    app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     # Webhook (Render uchun)
