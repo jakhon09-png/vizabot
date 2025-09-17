@@ -1,5 +1,6 @@
-python-telegram-bot[webhooks]==20.3
-google-generativeai
-python-dotenv
+python-telegram-bot[webhooks]==20.7
 requests
+python-dotenv
 deep-translator
+google-generativeai
+apscheduler
