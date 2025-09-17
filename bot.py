@@ -3,7 +3,7 @@ import asyncio
 import requests
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (
-    Application,
+    ApplicationBuilder,
     CommandHandler,
     MessageHandler,
     CallbackQueryHandler,
@@ -22,9 +22,10 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 WEATHER_API_KEY = os.getenv("WEATHER_API_KEY")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+RENDER_EXTERNAL_HOSTNAME = os.getenv("RENDER_EXTERNAL_HOSTNAME")
 
-if not TELEGRAM_TOKEN or not GEMINI_API_KEY:
-    print("Xato: TELEGRAM_TOKEN yoki GEMINI_API_KEY topilmadi!")
+if not TELEGRAM_TOKEN or not GEMINI_API_KEY or not WEATHER_API_KEY:
+    print("Xato: TELEGRAM_TOKEN, GEMINI_API_KEY yoki WEATHER_API_KEY topilmadi!")
     exit(1)
 
 # Gemini sozlamalari
@@ -291,7 +292,7 @@ async def send_report(context: ContextTypes.DEFAULT_TYPE):
 
 # ---- MAIN ----
 def main():
-    app = Application.builder().token(TELEGRAM_TOKEN).build()
+    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
     # Buyruqlar
     app.add_handler(CommandHandler("start", start))
@@ -314,22 +315,25 @@ def main():
 
     # --- Scheduler (23:59 da hisobot yuboradi) ---
     scheduler = AsyncIOScheduler(timezone="Asia/Tashkent")
-    scheduler.add_job(send_report, "cron", hour=23, minute=59, args=[app.bot])
+    scheduler.add_job(send_report, "cron", hour=23, minute=59, args=[app])
     scheduler.start()
 
     # Webhook (Render uchun)
     port = int(os.environ.get("PORT", 8443))
     url_path = TELEGRAM_TOKEN
-    webhook_url = f"https://{os.environ.get('RENDER_EXTERNAL_HOSTNAME')}/{url_path}"
+    webhook_url = f"https://{RENDER_EXTERNAL_HOSTNAME}/{url_path}" if RENDER_EXTERNAL_HOSTNAME else None
 
-    print("Bot webhook bilan ishga tushmoqda:", webhook_url)
-
-    app.run_webhook(
-        listen="0.0.0.0",
-        port=port,
-        url_path=url_path,
-        webhook_url=webhook_url,
-    )
+    if not webhook_url:
+        print("Xato: RENDER_EXTERNAL_HOSTNAME aniqlanmadi!")
+        app.run_polling()
+    else:
+        print("Bot webhook bilan ishga tushmoqda:", webhook_url)
+        app.run_webhook(
+            listen="0.0.0.0",
+            port=port,
+            url_path=url_path,
+            webhook_url=webhook_url,
+        )
 
 if __name__ == "__main__":
     main()
