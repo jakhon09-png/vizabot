@@ -2,12 +2,16 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 import google.generativeai as genai
 import os
+from dotenv import load_dotenv
 import time
 from datetime import datetime, timedelta
 
+# .env faylini yuklash
+load_dotenv()
+
 # Environment Variables dan o'qish
-TELEGRAM_TOKEN = os.getenv("8338692969:AAF8LfY4JLsyOgaiPodJlliBjDPgbBMerPc")
-GEMINI_API_KEY = os.getenv("AIzaSyAz3h--YvkF5DwT0s0jF8_65JIt25tpIvg")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 if not TELEGRAM_TOKEN or not GEMINI_API_KEY:
     print("Xato: TELEGRAM_TOKEN yoki GEMINI_API_KEY topilmadi!")
