@@ -17,7 +17,6 @@ from deep_translator import GoogleTranslator
 
 # .env yuklash
 load_dotenv()
-
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 WEATHER_API_KEY = os.getenv("WEATHER_API_KEY")
@@ -30,41 +29,42 @@ if not TELEGRAM_TOKEN or not GEMINI_API_KEY:
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel("gemini-1.5-flash")
 
-# ---- Shaharlar (O‘zbekiston) ----
+# 🌤 O‘zbekiston shaharlar ro‘yxati
 UZ_CITIES = [
     "Tashkent", "Samarkand", "Bukhara", "Khiva", "Andijan", "Namangan",
     "Fergana", "Kokand", "Jizzakh", "Navoiy", "Qarshi", "Termez",
     "Gulistan", "Shahrisabz", "Urgench"
 ]
 
-# ---- Kriptovalyutalar ----
+# 💰 Mashhur kriptovalyutalar
 CRYPTO_COINS = ["bitcoin", "ethereum", "tether", "bnb", "solana", "dogecoin"]
 
-# ---- Tarjima tillari ----
+# 🔤 Tarjima tillari
 LANG_CODES = {
     "🇺🇸 Ingliz": "en",
     "🇷🇺 Rus": "ru",
     "🇺🇿 O‘zbek": "uz",
     "🇹🇷 Turk": "tr",
-    "🇰🇿 Qozoq": "kk",
+    "🇩🇪 Nemis": "de",
+    "🇫🇷 Fransuz": "fr"
 }
 
-# ---- Start ----
+# ---- Start va Help ----
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Salom! Men AI botman 🤖. /help buyrug‘ini yozib ko‘ring.")
 
-# ---- Help ----
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton("🌤 Ob-havo", callback_data="menu_weather")],
-        [InlineKeyboardButton("💰 Kripto", callback_data="menu_crypto")],
-        [InlineKeyboardButton("🔤 Tarjima", callback_data="menu_translate")],
-        [InlineKeyboardButton("📝 Tarix", callback_data="menu_history")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("Quyidagi xizmatlardan birini tanlang:", reply_markup=reply_markup)
+    text = (
+        "/start - Botni ishga tushirish\n"
+        "/help - Yordam\n"
+        "/weather - Shaharni tanlab, ob-havo olish\n"
+        "/crypto - Kripto tanlab, narxini olish\n"
+        "/translate - Tilni tanlab, tarjima qilish\n"
+        "🤖 Boshqa xabar yuborsangiz — Gemini AI javob beradi\n"
+    )
+    await update.message.reply_text(text)
 
-# ---- Weather ----
+# ---- WEATHER ----
 async def weather_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard, row = [], []
     for i, city in enumerate(UZ_CITIES, start=1):
@@ -76,10 +76,7 @@ async def weather_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard.append(row)
 
     reply_markup = InlineKeyboardMarkup(keyboard)
-    if update.message:
-        await update.message.reply_text("🌤 Qaysi shahar ob-havosini bilmoqchisiz?", reply_markup=reply_markup)
-    else:
-        await update.callback_query.edit_message_text("🌤 Qaysi shahar ob-havosini bilmoqchisiz?", reply_markup=reply_markup)
+    await update.message.reply_text("🌤 Qaysi shahar ob-havosini bilmoqchisiz?", reply_markup=reply_markup)
 
 async def weather_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -98,15 +95,12 @@ async def weather_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await query.edit_message_text(f"Xatolik: {str(e)}")
 
-# ---- Crypto ----
+# ---- CRYPTO ----
 async def crypto_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton(coin.capitalize(), callback_data=f"crypto_{coin}")]
                 for coin in CRYPTO_COINS]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    if update.message:
-        await update.message.reply_text("💰 Qaysi kripto narxini bilmoqchisiz?", reply_markup=reply_markup)
-    else:
-        await update.callback_query.edit_message_text("💰 Qaysi kripto narxini bilmoqchisiz?", reply_markup=reply_markup)
+    await update.message.reply_text("💰 Qaysi kripto narxini bilmoqchisiz?", reply_markup=reply_markup)
 
 async def crypto_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -124,55 +118,40 @@ async def crypto_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await query.edit_message_text(f"Xatolik: {str(e)}")
 
-# ---- Translate ----
+# ---- TRANSLATE ----
 async def translate_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton(name, callback_data=f"lang_{code}")]
                 for name, code in LANG_CODES.items()]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    if update.message:
-        await update.message.reply_text("🔤 Qaysi tilga tarjima qilmoqchisiz?", reply_markup=reply_markup)
-    else:
-        await update.callback_query.edit_message_text("🔤 Qaysi tilga tarjima qilmoqchisiz?", reply_markup=reply_markup)
+    await update.message.reply_text("🔤 Qaysi tilga tarjima qilmoqchisiz?", reply_markup=reply_markup)
 
 async def lang_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     lang = query.data.replace("lang_", "")
     context.user_data["target_lang"] = lang
-    await query.edit_message_text(f"✍️ Matn yuboring, men uni `{lang}` tiliga tarjima qilaman.")
+    await query.edit_message_text(f"✍️ Endi matn yuboring, men uni `{lang}` tiliga tarjima qilaman.")
 
 async def translate_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if "target_lang" not in context.user_data:
+        # agar translate rejimida bo‘lmasa, AI ishlaydi
+        await handle_ai_message(update, context)
         return
+
     lang = context.user_data["target_lang"]
     text = update.message.text
     try:
         translated = GoogleTranslator(source="auto", target=lang).translate(text)
         await update.message.reply_text(f"🔤 Tarjima ({lang}): {translated}")
+        del context.user_data["target_lang"]  # keyingi safar qayta tanlashi uchun
     except Exception as e:
         await update.message.reply_text(f"Xatolik: {str(e)}")
 
-# ---- History ----
-async def history(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    history_list = context.user_data.get("history", [])
-    if not history_list:
-        await update.message.reply_text("📭 Hali hech qanday tarix mavjud emas.")
-        return
-    msg = "📝 So‘nggi 5 ta savol va javob:\n\n"
-    for i, (q, a) in enumerate(history_list[-5:], start=1):
-        msg += f"{i}. ❓ {q}\n➡️ {a[:100]}...\n\n"
-    await update.message.reply_text(msg)
-
-# ---- AI Chat ----
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if "target_lang" in context.user_data:
-        # Agar translate rejimida bo‘lsa
-        await translate_message(update, context)
-        return
-
+# ---- GEMINI AI ----
+async def handle_ai_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     last_message_time = context.user_data.get("last_message_time", None)
     if last_message_time and datetime.now() < last_message_time + timedelta(seconds=5):
-        await update.message.reply_text("Iltimos, biroz kuting!")
+        await update.message.reply_text("⏳ Iltimos, biroz kuting!")
         return
 
     context.user_data["last_message_time"] = datetime.now()
@@ -183,10 +162,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ai_response = response.text
     except Exception as e:
         ai_response = f"Xatolik: {str(e)}"
-
-    history_list = context.user_data.get("history", [])
-    history_list.append((user_message, ai_response))
-    context.user_data["history"] = history_list[-10:]
 
     await update.message.reply_text(ai_response)
 
@@ -200,16 +175,14 @@ def main():
     app.add_handler(CommandHandler("weather", weather_start))
     app.add_handler(CommandHandler("crypto", crypto_start))
     app.add_handler(CommandHandler("translate", translate_start))
-    app.add_handler(CommandHandler("history", history))
 
-    # Callback tugmalar
+    # Tugma handlerlar
     app.add_handler(CallbackQueryHandler(weather_button, pattern="^weather_"))
     app.add_handler(CallbackQueryHandler(crypto_button, pattern="^crypto_"))
     app.add_handler(CallbackQueryHandler(lang_button, pattern="^lang_"))
-    app.add_handler(CallbackQueryHandler(help_command, pattern="^menu_"))
 
-    # Matnli xabarlar
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    # Matn handler (tarjima yoki AI)
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, translate_message))
 
     # Webhook (Render uchun)
     port = int(os.environ.get("PORT", 8443))
