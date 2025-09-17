@@ -324,15 +324,16 @@ def main():
     webhook_url = f"https://{RENDER_EXTERNAL_HOSTNAME}/{url_path}" if RENDER_EXTERNAL_HOSTNAME else None
 
     if not webhook_url:
-        print("Xato: RENDER_EXTERNAL_HOSTNAME aniqlanmadi!")
+        print("Xato: RENDER_EXTERNAL_HOSTNAME aniqlanmadi! Polling rejimida ishlayapman.")
         app.run_polling()
     else:
-        print("Bot webhook bilan ishga tushmoqda:", webhook_url)
+        print(f"Bot webhook bilan ishga tushmoqda: {webhook_url}")
         app.run_webhook(
             listen="0.0.0.0",
             port=port,
             url_path=url_path,
             webhook_url=webhook_url,
+            allowed_updates=Update.ALL_TYPES  # Barcha yangilanishlarni qo‘llab-quvvatlash
         )
 
 if __name__ == "__main__":
