@@ -49,6 +49,49 @@ LANG_CODES = {
     "🇫🇷 Fransuz": "fr"
 }
 
+# 🌤 Inglizcha → O‘zbekcha ob-havo tarjimalari
+WEATHER_CONDITIONS = {
+    "clear sky": "ochiq osmon",
+    "few clouds": "biroz bulutli",
+    "scattered clouds": "sochma bulutlar",
+    "broken clouds": "qisman bulutli",
+    "overcast clouds": "to‘liq bulutli",
+    "shower rain": "jala",
+    "light rain": "yengil yomg‘ir",
+    "moderate rain": "o‘rtacha yomg‘ir",
+    "heavy intensity rain": "kuchli yomg‘ir",
+    "very heavy rain": "juda kuchli yomg‘ir",
+    "extreme rain": "o‘ta kuchli yomg‘ir",
+    "rain": "yomg‘ir",
+    "freezing rain": "muzlab tushadigan yomg‘ir",
+    "light snow": "yengil qor",
+    "snow": "qor",
+    "heavy snow": "qalin qor",
+    "sleet": "yomg‘ir-qor",
+    "light shower sleet": "yengil yomg‘ir-qor",
+    "shower sleet": "yomg‘ir-qor yog‘ishi",
+    "light rain and snow": "yengil yomg‘ir-qor",
+    "rain and snow": "yomg‘ir-qor aralash",
+    "light shower snow": "yengil qor yog‘ishi",
+    "shower snow": "qor yog‘ishi",
+    "heavy shower snow": "kuchli qor yog‘ishi",
+    "thunderstorm": "momaqaldiroq",
+    "thunderstorm with rain": "momaqaldiroq va yomg‘ir",
+    "thunderstorm with heavy rain": "momaqaldiroq va kuchli yomg‘ir",
+    "thunderstorm with light rain": "momaqaldiroq va yengil yomg‘ir",
+    "thunderstorm with drizzle": "momaqaldiroq va mayda yomg‘ir",
+    "thunderstorm with snow": "momaqaldiroq va qor",
+    "mist": "tuman",
+    "smoke": "tutun",
+    "haze": "xira havo",
+    "fog": "tuman",
+    "sand": "qumli bo‘ron",
+    "dust": "chang",
+    "ash": "vulkan kul",
+    "squall": "kuchli shamol",
+    "tornado": "tornado"
+}
+
 # ---- Start va Help ----
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Salom! Men AI botman 🤖. /help buyrug‘ini yozib ko‘ring.")
@@ -83,15 +126,20 @@ async def weather_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     city = query.data.replace("weather_", "")
 
-    url = f"http://api.openweathermap.org/data/2.5/weather?q={city}&appid={WEATHER_API_KEY}&units=metric&lang=uz"
+    url = f"http://api.openweathermap.org/data/2.5/weather?q={city}&appid={WEATHER_API_KEY}&units=metric&lang=en"
     try:
         res = requests.get(url).json()
         if res.get("cod") != 200:
             await query.edit_message_text(f"❌ Ob-havo topilmadi: {city}")
             return
+
         temp = res["main"]["temp"]
-        desc = res["weather"][0]["description"]
-        await query.edit_message_text(f"🌤 {city} ob-havosi:\n{temp}°C, {desc}")
+        desc = res["weather"][0]["description"].lower()
+
+        # O‘zbekcha tarjima
+        uz_desc = WEATHER_CONDITIONS.get(desc, desc)
+
+        await query.edit_message_text(f"🌤 {city} ob-havosi:\n{temp}°C, {uz_desc}")
     except Exception as e:
         await query.edit_message_text(f"Xatolik: {str(e)}")
 
@@ -165,7 +213,7 @@ async def handle_ai_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(ai_response)
 
-# ---- Main ----
+# ---- MAIN ----
 def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
 
