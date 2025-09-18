@@ -297,8 +297,7 @@ def main():
     if not webhook_url:
         print("Xato: RENDER_EXTERNAL_HOSTNAME aniqlanmadi! Polling rejimida ishlayapman.")
         application.run_polling(allowed_updates=Update.ALL_TYPES)
-        # Scheduler'ni polling boshlanganidan keyin ishga tushiramiz
-        scheduler.start()
+        scheduler.start()  # Polling boshlanganidan keyin scheduler'ni ishga tushiramiz
     else:
         print(f"Bot webhook bilan ishga tushmoqda: {webhook_url}")
         application.run_webhook(
@@ -308,8 +307,7 @@ def main():
             webhook_url=webhook_url,
             allowed_updates=Update.ALL_TYPES
         )
-        # Scheduler'ni webhook boshlanganidan keyin ishga tushiramiz
-        scheduler.start()
+        scheduler.start()  # Webhook boshlanganidan keyin scheduler'ni ishga tushiramiz
 
 if __name__ == "__main__":
     main()
