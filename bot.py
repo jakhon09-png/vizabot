@@ -4,7 +4,7 @@ import requests
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from deep_translator import GoogleTranslator
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, Bot
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -15,6 +15,7 @@ from telegram.ext import (
 )
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import google.generativeai as genai
+from fastapi import FastAPI, Request
 
 # ======= Muhit o'zgaruvchilarini yuklash =======
 load_dotenv()
@@ -61,6 +62,11 @@ def add_user(user_id, context):
     users = context.bot_data.get("users", set())
     users.add(user_id)
     context.bot_data["users"] = users
+
+# ======= Telegram bot va FastAPI =======
+bot = Bot(token=TELEGRAM_TOKEN)
+application = Application.builder().token(TELEGRAM_TOKEN).build()
+app = FastAPI()
 
 # ======= Gemini AI javob =======
 async def handle_ai_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -196,11 +202,17 @@ async def send_report(context: ContextTypes.DEFAULT_TYPE):
         msg += f"🕒 {time} | 👤 {uid}\n💬 {text}\n\n"
     await context.bot.send_message(ADMIN_ID, msg)
 
-# ======= MAIN =======
-async def main():
-    application = Application.builder().token(TELEGRAM_TOKEN).build()
+# ======= FastAPI webhook =======
+@app.post(f"/{TELEGRAM_TOKEN}")
+async def telegram_webhook(request: Request):
+    data = await request.json()
+    update = Update.de_json(data, bot)
+    await application.update_queue.put(update)
+    return {"ok": True}
 
-    # Handlers
+# ======= Main function =======
+async def main():
+    # Handlers qo'shish
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("myid", myid))
@@ -214,23 +226,4 @@ async def main():
 
     # Scheduler
     scheduler = AsyncIOScheduler(timezone="Asia/Tashkent")
-    scheduler.add_job(send_report, "cron", hour=23, minute=59, args=[application])
-    scheduler.start()
-
-    # Webhook
-    if not RENDER_EXTERNAL_HOSTNAME:
-        print("Xato: RENDER_EXTERNAL_HOSTNAME aniqlanmadi, polling ishlayapti")
-        await application.run_polling()
-    else:
-        webhook_url = f"https://{RENDER_EXTERNAL_HOSTNAME}/{TELEGRAM_TOKEN}"
-        print(f"Webhook bilan ishga tushmoqda: {webhook_url}")
-        await application.bot.set_webhook(webhook_url)
-        await application.run_webhook(
-            listen="0.0.0.0",
-            port=int(os.environ.get("PORT", 8443)),
-            url_path=TELEGRAM_TOKEN,
-            webhook_url=webhook_url
-        )
-
-if __name__ == "__main__":
-    asyncio.run(main())
+    scheduler.add
