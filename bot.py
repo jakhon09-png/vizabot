@@ -15,8 +15,15 @@ from dotenv import load_dotenv
 from datetime import datetime, timedelta
 from deep_translator import GoogleTranslator
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+import logging
 
-# .env yuklash
+# Log sozlamalari
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
+# .env faylini yuklash
 load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -24,8 +31,8 @@ WEATHER_API_KEY = os.getenv("WEATHER_API_KEY")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 RENDER_EXTERNAL_HOSTNAME = os.getenv("RENDER_EXTERNAL_HOSTNAME")
 
-if not TELEGRAM_TOKEN or not GEMINI_API_KEY or not WEATHER_API_KEY:
-    print("Xato: TELEGRAM_TOKEN, GEMINI_API_KEY yoki WEATHER_API_KEY topilmadi!")
+if not all([TELEGRAM_TOKEN, GEMINI_API_KEY, WEATHER_API_KEY]):
+    logging.error("Xato: Kerakli muhit o'zgaruvchilari (TELEGRAM_TOKEN, GEMINI_API_KEY, WEATHER_API_KEY) topilmadi!")
     exit(1)
 
 # Gemini sozlamalari
@@ -76,16 +83,19 @@ WEATHER_CONDITIONS = {
 
 # --- Foydalanuvchilarni saqlash ---
 def add_user(user_id, context):
+    """Foydalanuvchini bot_data'ga qo'shish."""
     users = context.bot_data.get("users", set())
     users.add(user_id)
     context.bot_data["users"] = users
 
 # ---- Start va Help ----
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Botni ishga tushirish buyrug'i."""
     add_user(update.effective_user.id, context)
     await update.message.reply_text("Salom! Men AI botman 🤖. /help buyrug‘ini yozib ko‘ring.")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Yordam buyrug'i."""
     text = (
         "/start - Botni ishga tushirish\n"
         "/help - Yordam\n"
@@ -109,10 +119,12 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ---- My ID ----
 async def myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(f"Sizning ID: {update.effective_user.id}")
+    """Foydalanuvchi ID'sini ko'rsatish."""
+    await update.message.reply_text(f"Sizning ID: `{update.effective_user.id}`", parse_mode="Markdown")
 
 # ---- WEATHER ----
 async def weather_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Ob-havo uchun shahar tugmalarini ko'rsatish."""
     keyboard, row = [], []
     for i, city in enumerate(UZ_CITIES, start=1):
         row.append(InlineKeyboardButton(city, callback_data=f"weather_{city}"))
@@ -126,6 +138,7 @@ async def weather_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🌤 Qaysi shahar ob-havosini bilmoqchisiz?", reply_markup=reply_markup)
 
 async def weather_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Ob-havo tugmasini bosganda ishlash."""
     query = update.callback_query
     await query.answer()
     city = query.data.replace("weather_", "")
@@ -142,17 +155,21 @@ async def weather_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         uz_desc = WEATHER_CONDITIONS.get(desc, desc)
 
         await query.edit_message_text(f"🌤 {city} ob-havosi:\n{temp}°C, {uz_desc}")
-    except Exception as e:
-        await query.edit_message_text(f"Xatolik: {str(e)}")
+    except requests.exceptions.RequestException:
+        await query.edit_message_text("Xatolik: Tarmoq bilan bog'liq muammo.")
+    except KeyError:
+        await query.edit_message_text("Xatolik: API javobida kutilmagan ma'lumotlar.")
 
 # ---- CRYPTO ----
 async def crypto_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Kripto tugmalarini ko'rsatish."""
     keyboard = [[InlineKeyboardButton(coin.capitalize(), callback_data=f"crypto_{coin}")]
                 for coin in CRYPTO_COINS]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text("💰 Qaysi kripto narxini bilmoqchisiz?", reply_markup=reply_markup)
 
 async def crypto_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Kripto tugmasini bosganda ishlash."""
     query = update.callback_query
     await query.answer()
     coin = query.data.replace("crypto_", "")
@@ -164,18 +181,22 @@ async def crypto_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(f"❌ Kripto topilmadi: {coin}")
             return
         price = res[coin]["usd"]
-        await query.edit_message_text(f"💰 {coin.capitalize()} narxi: ${price}")
-    except Exception as e:
-        await query.edit_message_text(f"Xatolik: {str(e)}")
+        await query.edit_message_text(f"💰 {coin.capitalize()} narxi: `${price}`", parse_mode="Markdown")
+    except requests.exceptions.RequestException:
+        await query.edit_message_text("Xatolik: Tarmoq bilan bog'liq muammo.")
+    except KeyError:
+        await query.edit_message_text("Xatolik: API javobida kutilmagan ma'lumotlar.")
 
 # ---- TRANSLATE ----
 async def translate_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Tarjima uchun til tugmalarini ko'rsatish."""
     keyboard = [[InlineKeyboardButton(name, callback_data=f"lang_{code}")]
                 for name, code in LANG_CODES.items()]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text("🔤 Qaysi tilga tarjima qilmoqchisiz?", reply_markup=reply_markup)
 
 async def lang_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Til tugmasini bosganda ishlash."""
     query = update.callback_query
     await query.answer()
     lang = query.data.replace("lang_", "")
@@ -183,7 +204,9 @@ async def lang_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(f"✍️ Endi matn yuboring, men uni `{lang}` tiliga tarjima qilaman.")
 
 async def translate_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Matnni tarjima qilish yoki AIga yuborish."""
     if "target_lang" not in context.user_data:
+        # Agar tarjima rejimi faol bo'lmasa, AI javob beradi
         await handle_ai_message(update, context)
         return
 
@@ -195,9 +218,11 @@ async def translate_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         del context.user_data["target_lang"]
     except Exception as e:
         await update.message.reply_text(f"Xatolik: {str(e)}")
+        del context.user_data["target_lang"]
 
 # ---- CURRENCY ----
 async def currency(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Valyuta kurslarini olish."""
     url = "https://cbu.uz/oz/arkhiv-kursov-valyut/json/"
     try:
         res = requests.get(url).json()
@@ -212,11 +237,14 @@ async def currency(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text += f"1 {c['Ccy']} = {c['Rate']} so‘m\n"
 
         await update.message.reply_text(text)
+    except requests.exceptions.RequestException:
+        await update.message.reply_text("Xatolik: Tarmoq bilan bog'liq muammo.")
     except Exception as e:
         await update.message.reply_text(f"Xatolik: {str(e)}")
 
 # ---- GEMINI AI ----
 async def handle_ai_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Gemini AI orqali xabarlarga javob berish."""
     user_id = update.effective_user.id
     add_user(user_id, context)
 
@@ -233,15 +261,17 @@ async def handle_ai_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["last_message_time"] = datetime.now()
 
     try:
+        # Sinxron funksiyani asinxron tarzda chaqirish
         response = await asyncio.to_thread(model.generate_content, update.message.text)
         ai_response = response.text
     except Exception as e:
-        ai_response = f"Xatolik: {str(e)}"
+        ai_response = f"Xatolik: Gemini AI javob berishda muvaffaqiyatsiz tugadi. Sabab: {str(e)}"
 
     await update.message.reply_text(ai_response)
 
 # ---- ADMIN funksiyalari ----
 async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Barcha foydalanuvchilarga xabar yuborish."""
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("❌ Siz admin emassiz.")
         return
@@ -262,16 +292,18 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
             sent += 1
         except Exception:
             failed += 1
-
+    
     await update.message.reply_text(f"✅ Yuborildi: {sent} ta\n❌ Xato: {failed} ta")
 
 async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin uchun hisobot buyrug'i."""
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("❌ Siz admin emassiz.")
         return
     await send_report(context)
 
 async def send_report(context: ContextTypes.DEFAULT_TYPE):
+    """Kunlik hisobotni admin'ga yuborish."""
     logs = context.bot_data.get("logs", [])
     users = context.bot_data.get("users", set())
 
@@ -286,12 +318,13 @@ async def send_report(context: ContextTypes.DEFAULT_TYPE):
         "📝 Oxirgi 5 ta so‘rov:\n"
     )
     for time, uid, text in logs[-5:]:
-        msg += f"🕒 {time} | 👤 {uid}\n💬 {text}\n\n"
+        msg += f"🕒 {time} | 👤 `{uid}`\n💬 {text}\n\n"
 
-    await context.bot.send_message(ADMIN_ID, msg)
+    await context.bot.send_message(ADMIN_ID, msg, parse_mode="Markdown")
 
 # ---- MAIN ----
 def main():
+    """Botni ishga tushirish funksiyasi."""
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
     # Buyruqlar
@@ -301,9 +334,11 @@ def main():
     app.add_handler(CommandHandler("crypto", crypto_start))
     app.add_handler(CommandHandler("translate", translate_start))
     app.add_handler(CommandHandler("currency", currency))
+    app.add_handler(CommandHandler("myid", myid))
+    
+    # Admin buyruqlari
     app.add_handler(CommandHandler("broadcast", broadcast))
     app.add_handler(CommandHandler("report", report))
-    app.add_handler(CommandHandler("myid", myid))
 
     # Tugma handlerlar
     app.add_handler(CallbackQueryHandler(weather_button, pattern="^weather_"))
@@ -316,24 +351,21 @@ def main():
     # --- Scheduler (23:59 da hisobot yuboradi) ---
     scheduler = AsyncIOScheduler(timezone="Asia/Tashkent")
     scheduler.add_job(send_report, "cron", hour=23, minute=59, args=[app])
-    scheduler.start()
-
-    # Webhook (Render uchun)
-    port = int(os.environ.get("PORT", 8443))
-    url_path = TELEGRAM_TOKEN
-    webhook_url = f"https://{RENDER_EXTERNAL_HOSTNAME}/{url_path}" if RENDER_EXTERNAL_HOSTNAME else None
-
-    if not webhook_url:
-        print("Xato: RENDER_EXTERNAL_HOSTNAME aniqlanmadi! Polling rejimida ishlayapman.")
+    
+    # Botni ishga tushirish va Scheduler'ni boshlash
+    if not RENDER_EXTERNAL_HOSTNAME:
+        logging.info("RENDER_EXTERNAL_HOSTNAME aniqlanmadi! Polling rejimida ishga tushmoqda.")
+        scheduler.start()
         app.run_polling()
     else:
-        print(f"Bot webhook bilan ishga tushmoqda: {webhook_url}")
+        logging.info(f"Bot webhook bilan ishga tushmoqda: https://{RENDER_EXTERNAL_HOSTNAME}/{TELEGRAM_TOKEN}")
+        scheduler.start()
         app.run_webhook(
             listen="0.0.0.0",
-            port=port,
-            url_path=url_path,
-            webhook_url=webhook_url,
-            allowed_updates=Update.ALL_TYPES  # Barcha yangilanishlarni qo‘llab-quvvatlash
+            port=int(os.environ.get("PORT", 8443)),
+            url_path=TELEGRAM_TOKEN,
+            webhook_url=f"https://{RENDER_EXTERNAL_HOSTNAME}/{TELEGRAM_TOKEN}",
+            allowed_updates=Update.ALL_TYPES
         )
 
 if __name__ == "__main__":
