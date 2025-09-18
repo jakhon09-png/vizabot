@@ -288,7 +288,6 @@ def main():
     # Scheduler (23:59 da hisobot yuboradi)
     scheduler = AsyncIOScheduler(timezone="Asia/Tashkent")
     scheduler.add_job(send_report, "cron", hour=23, minute=59, args=[application])
-    scheduler.start()
 
     # Webhook yoki polling
     port = int(os.environ.get("PORT", 8443))
@@ -298,6 +297,8 @@ def main():
     if not webhook_url:
         print("Xato: RENDER_EXTERNAL_HOSTNAME aniqlanmadi! Polling rejimida ishlayapman.")
         application.run_polling(allowed_updates=Update.ALL_TYPES)
+        # Scheduler'ni polling boshlanganidan keyin ishga tushiramiz
+        scheduler.start()
     else:
         print(f"Bot webhook bilan ishga tushmoqda: {webhook_url}")
         application.run_webhook(
@@ -307,6 +308,8 @@ def main():
             webhook_url=webhook_url,
             allowed_updates=Update.ALL_TYPES
         )
+        # Scheduler'ni webhook boshlanganidan keyin ishga tushiramiz
+        scheduler.start()
 
 if __name__ == "__main__":
     main()
