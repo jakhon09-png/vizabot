@@ -205,25 +205,4 @@ async def send_report(context: ContextTypes.DEFAULT_TYPE):
 # ======= FastAPI webhook =======
 @app.post(f"/{TELEGRAM_TOKEN}")
 async def telegram_webhook(request: Request):
-    data = await request.json()
-    update = Update.de_json(data, bot)
-    await application.update_queue.put(update)
-    return {"ok": True}
-
-# ======= Main function =======
-async def main():
-    # Handlers qo'shish
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("myid", myid))
-    application.add_handler(CommandHandler("weather", weather_start))
-    application.add_handler(CommandHandler("crypto", crypto_start))
-    application.add_handler(CommandHandler("translate", translate_start))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, translate_message))
-    application.add_handler(CallbackQueryHandler(weather_button, pattern="^weather_"))
-    application.add_handler(CallbackQueryHandler(crypto_button, pattern="^crypto_"))
-    application.add_handler(CallbackQueryHandler(lang_button, pattern="^lang_"))
-
-    # Scheduler
-    scheduler = AsyncIOScheduler(timezone="Asia/Tashkent")
-    scheduler.add
+    data
