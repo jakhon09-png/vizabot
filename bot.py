@@ -12,7 +12,7 @@ from telegram.ext import (
 )
 import google.generativeai as genai
 from dotenv import load_dotenv
-from datetime import datetime, timedelta
+from datetime import datetime
 from deep_translator import GoogleTranslator
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import speech_recognition as sr
@@ -20,7 +20,7 @@ from gtts import gTTS
 from pydub import AudioSegment
 import io
 import logging
-import json
+from PIL import Image
 
 # Logging sozlamalari
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -40,13 +40,7 @@ if not TELEGRAM_TOKEN or not GEMINI_API_KEY or not WEATHER_API_KEY:
 
 # Gemini sozlamalari
 genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel(
-    "gemini-1.5-flash",
-    generation_config=genai.types.GenerationConfig(
-        max_output_tokens=500,
-        temperature=0.7,
-    )
-)
+model = genai.GenerativeModel("gemini-1.5-flash")
 
 # 🌤 O‘zbekiston shaharlar ro‘yxati
 UZ_CITIES = [
@@ -95,16 +89,16 @@ def add_user(user_id, context):
     users = context.bot_data.get("users", set())
     users.add(user_id)
     context.bot_data["users"] = users
-    logger.info(f"Yangi foydalanuvchi qo‘shildi: {user_id}")
 
-# --- Loglarni saqlash ---
-def add_log(context, user_id, text):
-    logs = context.bot_data.get("logs", [])
-    logs.append((datetime.now().strftime("%H:%M"), user_id, text))
-    if len(logs) > 100:  # Maksimum 100 ta log saqlash
-        logs = logs[-100:]
-    context.bot_data["logs"] = logs
-    logger.info(f"Yangi log qo‘shildi: {user_id}, {text}")
+# ---- Chat tarixini boshqarish ---
+def get_chat_history(context, user_id, max_length=5):
+    history = context.user_data.get(user_id, {}).get("chat_history", [])
+    return history[-max_length:]
+
+def update_chat_history(context, user_id, message):
+    if user_id not in context.user_data:
+        context.user_data[user_id] = {"chat_history": []}
+    context.user_data[user_id]["chat_history"].append(message)
 
 # ---- Ovozli xabarni matnga aylantirish ----
 def speech_to_text(voice_file):
@@ -116,17 +110,13 @@ def speech_to_text(voice_file):
             with sr.AudioFile("temp.wav") as source:
                 audio_data = recognizer.record(source)
                 text = recognizer.recognize_google(audio_data, language="uz-UZ")
-                logger.info(f"Matnni ovozga aylantirish muvaffaqiyatli: {text}")
                 return text
     except sr.UnknownValueError:
-        logger.error("Ovozli xabar tushunilmadi.")
         return "Ovozli xabar tushunilmadi."
     except sr.RequestError as e:
-        logger.error(f"Audioni qayta ishlashda xatolik: {str(e)}")
-        return "Audioni qayta ishlashda xatolik."
+        return f"Audioni qayta ishlashda xatolik: {str(e)}"
     except Exception as e:
-        logger.error(f"Xatolik ovozli qayta ishlashda: {str(e)}")
-        return "Xatolik yuz berdi."
+        return f"Xatolik: {str(e)}"
     finally:
         if os.path.exists("temp.wav"):
             os.remove("temp.wav")
@@ -138,54 +128,96 @@ def text_to_speech(text, lang="uz"):
         with io.BytesIO() as audio_file:
             tts.write_to_fp(audio_file)
             audio_file.seek(0)
-            logger.info("Ovozli javob tayyorlandi.")
             return audio_file
     except Exception as e:
         logger.error(f"Ovozga aylantirishda xatolik: {str(e)}")
         return None
 
 # ---- Visa yordami uchun maxsus funksiya ----
-async def handle_visa_query(update: Update, context: ContextTypes.DEFAULT_TYPE, text):
-    add_log(context, update.effective_user.id, text)
-    prompt = f"Berilgan savol visa bilan bog'liq bo'lsa, maxsus visa yordami sifatida javob bering. Agar mavzu boshqa bo'lsa, umumiy javob bering: {text}"
+async def handle_visa_query(update: Update, context: ContextTypes.DEFAULT_TYPE, text, history):
+    prompt = "Siz chat-bot sifatida ishlaysiz va foydalanuvchi bilan ketma-ket suhbatda javob berishingiz kerak, xuddi ChatGPT yoki Grok kabi. Foydalanuvchi savolini oldingi suhbat kontekstida hisobga oling:\n"
+    prompt += "\n".join([f"Foydalanuvchi: {msg['user']}\nBot: {msg['bot']}" for msg in history])
+    prompt += f"\nFoydalanuvchi: {text}\nBot: "
     try:
         response = await asyncio.to_thread(model.generate_content, prompt)
         return response.text
     except Exception as e:
-        logger.error(f"Gemini javobida xatolik: {str(e)}")
         return f"Xatolik: {str(e)}"
 
-# ---- Ovozli xabar handler ----
-async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    voice = update.message.voice
-    if not voice:
-        await update.message.reply_text("Iltimos, ovozli xabar yuboring!")
+# ---- Rasmlarni analiz qilish ----
+async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    photo = update.message.photo[-1]
+    file = await context.bot.get_file(photo.file_id)
+    image_data = await file.download_as_bytearray()
+    logger.info("Rasm yuklab olindi.")
+
+    try:
+        image = {'mime_type': 'image/jpeg', 'data': image_data}
+        prompt = "Bu rasmni tahlil qiling va tavsiflang. Agar visa bilan bog‘liq bo‘lsa, maslahat bering."
+        response = await asyncio.to_thread(model.generate_content, [image, prompt])
+        await update.message.reply_text(response.text)
+    except Exception as e:
+        logger.error(f"Rasm analizida xatolik: {str(e)}")
+        await update.message.reply_text(f"Rasm analizida xatolik: {str(e)}")
+
+# ---- Umumiy xabar handleri (matn va ovoz) ----
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    add_user(user_id, context)
+
+    # Antispam
+    last_message_time = context.user_data.get("last_message_time", None)
+    if last_message_time and datetime.now() < last_message_time + timedelta(seconds=5):
+        await update.message.reply_text("⏳ Iltimos, biroz kuting!")
+        return
+    context.user_data["last_message_time"] = datetime.now()
+
+    # Chat tarixini olish
+    history = get_chat_history(context, user_id)
+
+    # Matnli xabar
+    if update.message.text:
+        text = update.message.text
+        logger.info(f"Matnli xabar: {text}")
+        update_chat_history(context, user_id, {"user": text, "bot": ""})
+
+    # Ovozli xabar
+    elif update.message.voice:
+        voice = update.message.voice
+        file = await context.bot.get_file(voice.file_id)
+        voice_data = await file.download_as_bytearray()
+        logger.info("Ovozli xabar yuklab olindi.")
+        text = speech_to_text(voice_data)
+        await update.message.reply_text(f"Sizning ovozli xabaringiz: {text}")
+        update_chat_history(context, user_id, {"user": text, "bot": ""})
+
+    # Rasmlar
+    elif update.message.photo:
+        await handle_photo_message(update, context)
         return
 
-    file = await context.bot.get_file(voice.file_id)
-    voice_data = await file.download_as_bytearray()
-    logger.info("Ovozli xabar yuklab olindi.")
-
-    text = speech_to_text(voice_data)
-    await update.message.reply_text(f"Sizning ovozli xabaringiz: {text}")
-
-    response_text = await handle_visa_query(update, context, text)
-    await update.message.reply_text(f"Javob: {response_text}")
-
-    audio_file = text_to_speech(response_text, lang="uz")
-    if audio_file:
-        await update.message.reply_voice(audio_file)
     else:
-        await update.message.reply_text("Ovozli javob tayyorlanmadi, faqat matn bilan javob beraman.")
+        await update.message.reply_text("Noma'lum xabar. Matn, ovoz yoki rasm yuboring.")
+        return
+
+    # AI javobini olish
+    response_text = await handle_visa_query(update, context, text, history)
+    update_chat_history(context, user_id, {"user": text, "bot": response_text})
+
+    # Javob turi
+    if update.message.voice:
+        audio_file = text_to_speech(response_text, lang="uz")
+        if audio_file:
+            await update.message.reply_voice(audio_file)
+    else:
+        await update.message.reply_text(f"Javob: {response_text}")
 
 # ---- Start va Help ----
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     add_user(update.effective_user.id, context)
-    add_log(context, update.effective_user.id, "/start")
-    await update.message.reply_text("Salom! Men Vizabotman 🤖. Ovozli yoki matnli visa yordami uchun savollaringizni bering yoki /help ni ishlat.")
+    await update.message.reply_text("Salom! Men Vizabotman 🤖. Visa yordami uchun savollaringizni matn, ovoz yoki rasm orqali bering yoki /help ni ishlat.")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    add_log(context, update.effective_user.id, "/help")
     text = (
         "/start - Botni ishga tushirish\n"
         "/help - Yordam\n"
@@ -193,7 +225,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/crypto - Kripto tanlab, narxini olish\n"
         "/translate - Tilni tanlab, tarjima qilish\n"
         "/currency - Bugungi valyuta kurslari (CBU)\n"
-        "🤖 Visa yoki boshqa savollar uchun ovozli yoki matnli xabar yuboring – Gemini AI javob beradi\n"
+        "🤖 Visa yordami uchun matn, ovoz yoki rasm yuboring – ketma-ket suhbatda javob beraman!\n"
     )
     if update.effective_user.id == ADMIN_ID:
         text += (
@@ -206,12 +238,10 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ---- My ID ----
 async def myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    add_log(context, update.effective_user.id, "/myid")
     await update.message.reply_text(f"Sizning ID: {update.effective_user.id}")
 
 # ---- WEATHER ----
 async def weather_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    add_log(context, update.effective_user.id, "/weather")
     keyboard, row = [], []
     for i, city in enumerate(UZ_CITIES, start=1):
         row.append(InlineKeyboardButton(city, callback_data=f"weather_{city}"))
@@ -242,7 +272,6 @@ async def weather_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ---- CRYPTO ----
 async def crypto_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    add_log(context, update.effective_user.id, "/crypto")
     keyboard = [[InlineKeyboardButton(coin.capitalize(), callback_data=f"crypto_{coin}")]
                 for coin in CRYPTO_COINS]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -265,7 +294,6 @@ async def crypto_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ---- TRANSLATE ----
 async def translate_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    add_log(context, update.effective_user.id, "/translate")
     keyboard = [[InlineKeyboardButton(name, callback_data=f"lang_{code}")]
                 for name, code in LANG_CODES.items()]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -280,11 +308,10 @@ async def lang_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def translate_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if "target_lang" not in context.user_data:
-        await handle_voice_message(update, context)
+        await handle_message(update, context)
         return
     lang = context.user_data["target_lang"]
     text = update.message.text
-    add_log(context, update.effective_user.id, text)
     try:
         translated = GoogleTranslator(source="auto", target=lang).translate(text)
         await update.message.reply_text(f"🔤 Tarjima ({lang}): {translated}")
@@ -294,7 +321,6 @@ async def translate_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ---- CURRENCY ----
 async def currency(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    add_log(context, update.effective_user.id, "/currency")
     url = "https://cbu.uz/oz/arkhiv-kursov-valyut/json/"
     try:
         res = requests.get(url).json()
@@ -319,7 +345,6 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     text = " ".join(context.args)
     users = context.bot_data.get("users", set())
-    logger.info(f"Broadcast boshlanmoqda. Foydalanuvchilar soni: {len(users)}")
     if not users:
         await update.message.reply_text("📭 Hali foydalanuvchi yo‘q.")
         return
@@ -328,8 +353,7 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             await context.bot.send_message(uid, f"📢 Admin xabari:\n\n{text}")
             sent += 1
-        except Exception as e:
-            logger.error(f"Xabar yuborishda xatolik ({uid}): {str(e)}")
+        except Exception:
             failed += 1
     await update.message.reply_text(f"✅ Yuborildi: {sent} ta\n❌ Xato: {failed} ta")
 
@@ -342,7 +366,6 @@ async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def send_report(context: ContextTypes.DEFAULT_TYPE):
     logs = context.bot_data.get("logs", [])
     users = context.bot_data.get("users", set())
-    logger.info(f"Hisobot tayyorlanmoqda. Foydalanuvchilar: {len(users)}, Loglar: {len(logs)}")
     if not logs:
         await context.bot.send_message(ADMIN_ID, "📊 Bugun hech qanday so‘rov bo‘lmadi.")
         return
@@ -376,9 +399,8 @@ def main():
     application.add_handler(CallbackQueryHandler(crypto_button, pattern="^crypto_"))
     application.add_handler(CallbackQueryHandler(lang_button, pattern="^lang_"))
 
-    # Ovozli va matnli handlerlar
-    application.add_handler(MessageHandler(filters.VOICE, handle_voice_message))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, translate_message))
+    # Umumiy xabar handleri (matn, ovoz, rasm)
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND | filters.VOICE | filters.PHOTO, handle_message))
 
     # Scheduler (23:59 da hisobot yuboradi)
     scheduler = AsyncIOScheduler(timezone="Asia/Tashkent")
