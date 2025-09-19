@@ -15,15 +15,12 @@ from dotenv import load_dotenv
 from datetime import datetime, timedelta
 from deep_translator import GoogleTranslator
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-import logging
+import speech_recognition as sr
+from gtts import gTTS
+from pydub import AudioSegment
+import io
 
-# --- Logging sozlamalari ---
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO
-)
-
-# --- .env yuklash ---
+# .env yuklash
 load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -31,23 +28,31 @@ WEATHER_API_KEY = os.getenv("WEATHER_API_KEY")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 RENDER_EXTERNAL_HOSTNAME = os.getenv("RENDER_EXTERNAL_HOSTNAME")
 
-if not all([TELEGRAM_TOKEN, GEMINI_API_KEY, WEATHER_API_KEY]):
-    logging.error("Xato: Kerakli muhit o'zgaruvchilari topilmadi!")
+if not TELEGRAM_TOKEN or not GEMINI_API_KEY or not WEATHER_API_KEY:
+    print("Xato: TELEGRAM_TOKEN, GEMINI_API_KEY yoki WEATHER_API_KEY topilmadi!")
     exit(1)
 
-# --- Gemini AI sozlamalari ---
+# Gemini sozlamalari
 genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel("gemini-1.5-flash")
+model = genai.GenerativeModel(
+    "gemini-1.5-flash",
+    generation_config=genai.types.GenerationConfig(
+        max_output_tokens=500,
+        temperature=0.7,
+    )
+)
 
-# --- Shaharlar, kripto va tarjima sozlamalari ---
+# 🌤 O‘zbekiston shaharlar ro‘yxati
 UZ_CITIES = [
     "Tashkent", "Samarkand", "Bukhara", "Khiva", "Andijan", "Namangan",
     "Fergana", "Kokand", "Jizzakh", "Navoiy", "Qarshi", "Termez",
     "Gulistan", "Shahrisabz", "Urgench"
 ]
 
+# 💰 Mashhur kriptovalyutalar
 CRYPTO_COINS = ["bitcoin", "ethereum", "tether", "bnb", "solana", "dogecoin"]
 
+# 🔤 Tarjima tillari
 LANG_CODES = {
     "🇺🇸 Ingliz": "en",
     "🇷🇺 Rus": "ru",
@@ -57,6 +62,7 @@ LANG_CODES = {
     "🇫🇷 Fransuz": "fr"
 }
 
+# 🌤 Inglizcha → O‘zbekcha ob-havo tarjimalari
 WEATHER_CONDITIONS = {
     "clear sky": "ochiq osmon",
     "few clouds": "biroz bulutli",
@@ -84,43 +90,94 @@ def add_user(user_id, context):
     users.add(user_id)
     context.bot_data["users"] = users
 
-# --- Gemini AI / Visa yordami ---
+# ---- Ovozli xabarni matnga aylantirish ----
+def speech_to_text(voice_file):
+    recognizer = sr.Recognizer()
+    with io.BytesIO(voice_file) as audio_file:
+        audio = AudioSegment.from_file(audio_file, format="ogg")
+        audio.export("temp.wav", format="wav")
+        with sr.AudioFile("temp.wav") as source:
+            audio_data = recognizer.record(source)
+            try:
+                text = recognizer.recognize_google(audio_data, language="uz-UZ")
+                return text
+            except sr.UnknownValueError:
+                return "Ovozli xabar tushunilmadi."
+            except sr.RequestError:
+                return "Audioni qayta ishlashda xatolik."
+            finally:
+                if os.path.exists("temp.wav"):
+                    os.remove("temp.wav")
+
+# ---- Matnni ovozga aylantirish ----
+def text_to_speech(text, lang="uz"):
+    tts = gTTS(text=text, lang=lang, slow=False)
+    with io.BytesIO() as audio_file:
+        tts.write_to_fp(audio_file)
+        audio_file.seek(0)
+        return audio_file
+
+# ---- Visa yordami uchun maxsus funksiya ----
 async def handle_visa_query(update: Update, context: ContextTypes.DEFAULT_TYPE, text):
-    prompt = f"Visa yoki boshqa savol: {text}"
+    prompt = f"Berilgan savol visa bilan bog'liq bo'lsa, maxsus visa yordami sifatida javob bering. Agar mavzu boshqa bo'lsa, umumiy javob bering: {text}"
     try:
         response = await asyncio.to_thread(model.generate_content, prompt)
-        await update.message.reply_text(response.text)
+        return response.text
     except Exception as e:
-        await update.message.reply_text(f"Xatolik: {str(e)}")
+        return f"Xatolik: {str(e)}"
 
-# --- Start va Help ---
+# ---- Ovozli xabar handler ----
+async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    voice = update.message.voice
+    if not voice:
+        await update.message.reply_text("Iltimos, ovozli xabar yuboring!")
+        return
+
+    # Ovozli faylni yuklab olish
+    file = await context.bot.get_file(voice.file_id)
+    voice_data = await file.download_as_bytearray()
+
+    # Matnga aylantirish
+    text = speech_to_text(voice_data)
+    await update.message.reply_text(f"Sizning ovozli xabaringiz: {text}")
+
+    # AI javobini olish
+    response_text = await handle_visa_query(update, context, text)
+    await update.message.reply_text(f"Javob: {response_text}")
+
+    # Ovozli javob tayyorlash va yuborish
+    audio_file = text_to_speech(response_text, lang="uz")
+    await update.message.reply_voice(audio_file)
+
+# ---- Start va Help ----
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     add_user(update.effective_user.id, context)
-    await update.message.reply_text("Salom! Men Vizabotman 🤖. /help ni ishlatib ko‘ring.")
+    await update.message.reply_text("Salom! Men Vizabotman 🤖. Ovozli yoki matnli visa yordami uchun savollaringizni bering yoki /help ni ishlat.")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         "/start - Botni ishga tushirish\n"
         "/help - Yordam\n"
-        "/weather - Ob-havo\n"
-        "/crypto - Kripto narxi\n"
-        "/translate - Tarjima\n"
-        "/currency - Valyuta kurslari\n"
-        "🤖 Visa yoki boshqa savollar uchun xabar yuboring\n"
+        "/weather - Shaharni tanlab, ob-havo olish\n"
+        "/crypto - Kripto tanlab, narxini olish\n"
+        "/translate - Tilni tanlab, tarjima qilish\n"
+        "/currency - Bugungi valyuta kurslari (CBU)\n"
+        "🤖 Visa yoki boshqa savollar uchun ovozli yoki matnli xabar yuboring – Gemini AI javob beradi\n"
     )
     if update.effective_user.id == ADMIN_ID:
         text += (
-            "\n--- Admin buyruqlari ---\n"
+            "\n--- 🛠 Admin komandalar ---\n"
             "/broadcast - Hammaga xabar yuborish\n"
-            "/report - Hisobot\n"
-            "/myid - O‘z ID'ingizni ko‘rsatish\n"
+            "/report - So‘rovlar haqida hisobot\n"
+            "/myid - O‘z ID’ingizni bilish\n"
         )
     await update.message.reply_text(text)
 
+# ---- My ID ----
 async def myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"Sizning ID: {update.effective_user.id}")
 
-# --- Weather ---
+# ---- WEATHER ----
 async def weather_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard, row = [], []
     for i, city in enumerate(UZ_CITIES, start=1):
@@ -150,9 +207,10 @@ async def weather_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await query.edit_message_text(f"Xatolik: {str(e)}")
 
-# --- Crypto ---
+# ---- CRYPTO ----
 async def crypto_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [[InlineKeyboardButton(c.capitalize(), callback_data=f"crypto_{c}") for c in CRYPTO_COINS]]
+    keyboard = [[InlineKeyboardButton(coin.capitalize(), callback_data=f"crypto_{coin}")]
+                for coin in CRYPTO_COINS]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text("💰 Qaysi kripto narxini bilmoqchisiz?", reply_markup=reply_markup)
 
@@ -163,14 +221,18 @@ async def crypto_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = f"https://api.coingecko.com/api/v3/simple/price?ids={coin}&vs_currencies=usd"
     try:
         res = requests.get(url).json()
+        if coin not in res:
+            await query.edit_message_text(f"❌ Kripto topilmadi: {coin}")
+            return
         price = res[coin]["usd"]
         await query.edit_message_text(f"💰 {coin.capitalize()} narxi: ${price}")
     except Exception as e:
         await query.edit_message_text(f"Xatolik: {str(e)}")
 
-# --- Translate ---
+# ---- TRANSLATE ----
 async def translate_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [[InlineKeyboardButton(name, callback_data=f"lang_{code}")] for name, code in LANG_CODES.items()]
+    keyboard = [[InlineKeyboardButton(name, callback_data=f"lang_{code}")]
+                for name, code in LANG_CODES.items()]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text("🔤 Qaysi tilga tarjima qilmoqchisiz?", reply_markup=reply_markup)
 
@@ -179,26 +241,29 @@ async def lang_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     lang = query.data.replace("lang_", "")
     context.user_data["target_lang"] = lang
-    await query.edit_message_text(f"✍️ Matn yuboring, men uni `{lang}` tiliga tarjima qilaman.")
+    await query.edit_message_text(f"✍️ Endi matn yuboring, men uni `{lang}` tiliga tarjima qilaman.")
 
 async def translate_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if "target_lang" not in context.user_data:
-        await handle_visa_query(update, context, update.message.text)
+        await handle_voice_message(update, context)  # Ovozli xabarlar uchun tekshiruv
         return
     lang = context.user_data["target_lang"]
+    text = update.message.text
     try:
-        translated = GoogleTranslator(source="auto", target=lang).translate(update.message.text)
+        translated = GoogleTranslator(source="auto", target=lang).translate(text)
         await update.message.reply_text(f"🔤 Tarjima ({lang}): {translated}")
+        del context.user_data["target_lang"]
     except Exception as e:
         await update.message.reply_text(f"Xatolik: {str(e)}")
-    finally:
-        context.user_data.pop("target_lang", None)
 
-# --- Currency ---
+# ---- CURRENCY ----
 async def currency(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = "https://cbu.uz/oz/arkhiv-kursov-valyut/json/"
     try:
         res = requests.get(url).json()
+        if not res:
+            await update.message.reply_text("❌ Valyuta kurslari topilmadi.")
+            return
         selected = [c for c in res if c["Ccy"] in ["USD", "EUR", "RUB"]]
         text = "💱 Bugungi valyuta kurslari (CBU):\n\n"
         for c in selected:
@@ -207,7 +272,7 @@ async def currency(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"Xatolik: {str(e)}")
 
-# --- Admin ---
+# ---- ADMIN funksiyalari ----
 async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("❌ Siz admin emassiz.")
@@ -217,6 +282,9 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     text = " ".join(context.args)
     users = context.bot_data.get("users", set())
+    if not users:
+        await update.message.reply_text("📭 Hali foydalanuvchi yo‘q.")
+        return
     sent, failed = 0, 0
     for uid in users:
         try:
@@ -238,16 +306,21 @@ async def send_report(context: ContextTypes.DEFAULT_TYPE):
     if not logs:
         await context.bot.send_message(ADMIN_ID, "📊 Bugun hech qanday so‘rov bo‘lmadi.")
         return
-    msg = f"📊 Kunlik hisobot\n\n👥 Foydalanuvchilar soni: {len(users)}\n💬 So‘rovlar soni: {len(logs)}\n\nOxirgi 5 ta so‘rov:\n"
+    msg = (
+        f"📊 Kunlik hisobot\n\n"
+        f"👥 Foydalanuvchilar soni: {len(users)}\n"
+        f"💬 So‘rovlar soni: {len(logs)}\n\n"
+        "📝 Oxirgi 5 ta so‘rov:\n"
+    )
     for time, uid, text in logs[-5:]:
         msg += f"🕒 {time} | 👤 {uid}\n💬 {text}\n\n"
     await context.bot.send_message(ADMIN_ID, msg)
 
-# --- Main ---
+# ---- MAIN ----
 def main():
     application = Application.builder().token(TELEGRAM_TOKEN).build()
 
-    # --- Handlers ---
+    # Buyruqlar
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("weather", weather_start))
@@ -258,32 +331,38 @@ def main():
     application.add_handler(CommandHandler("report", report))
     application.add_handler(CommandHandler("myid", myid))
 
+    # Tugma handlerlar
     application.add_handler(CallbackQueryHandler(weather_button, pattern="^weather_"))
     application.add_handler(CallbackQueryHandler(crypto_button, pattern="^crypto_"))
     application.add_handler(CallbackQueryHandler(lang_button, pattern="^lang_"))
 
+    # Ovozli va matnli handlerlar
+    application.add_handler(MessageHandler(filters.VOICE, handle_voice_message))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, translate_message))
 
-    # --- Scheduler ---
+    # Scheduler (23:59 da hisobot yuboradi)
     scheduler = AsyncIOScheduler(timezone="Asia/Tashkent")
     scheduler.add_job(send_report, "cron", hour=23, minute=59, args=[application])
-    scheduler.start()
 
-    # --- Webhook / Polling ---
-    if RENDER_EXTERNAL_HOSTNAME:
-        url_path = TELEGRAM_TOKEN
-        webhook_url = f"https://{RENDER_EXTERNAL_HOSTNAME}/{url_path}"
+    # Webhook yoki polling
+    port = int(os.environ.get("PORT", 8443))
+    url_path = TELEGRAM_TOKEN
+    webhook_url = f"https://{RENDER_EXTERNAL_HOSTNAME}/{url_path}" if RENDER_EXTERNAL_HOSTNAME else None
+
+    if not webhook_url:
+        print("Xato: RENDER_EXTERNAL_HOSTNAME aniqlanmadi! Polling rejimida ishlayapman.")
+        application.run_polling(allowed_updates=Update.ALL_TYPES)
+        scheduler.start()
+    else:
         print(f"Bot webhook bilan ishga tushmoqda: {webhook_url}")
         application.run_webhook(
             listen="0.0.0.0",
-            port=int(os.environ.get("PORT", 8443)),
+            port=port,
             url_path=url_path,
             webhook_url=webhook_url,
             allowed_updates=Update.ALL_TYPES
         )
-    else:
-        print("Polling rejimida ishga tushmoqda...")
-        application.run_polling(allowed_updates=Update.ALL_TYPES)
+        scheduler.start()
 
 if __name__ == "__main__":
     main()
