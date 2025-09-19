@@ -3,7 +3,7 @@ import asyncio
 import requests
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (
-    Application,
+    ApplicationBuilder,
     CommandHandler,
     MessageHandler,
     CallbackQueryHandler,
@@ -12,7 +12,7 @@ from telegram.ext import (
 )
 import google.generativeai as genai
 from dotenv import load_dotenv
-from datetime import datetime
+from datetime import datetime, timedelta
 from deep_translator import GoogleTranslator
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import speech_recognition as sr
@@ -35,7 +35,7 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 RENDER_EXTERNAL_HOSTNAME = os.getenv("RENDER_EXTERNAL_HOSTNAME")
 
 if not TELEGRAM_TOKEN or not GEMINI_API_KEY or not WEATHER_API_KEY:
-    logger.error("Xato: TELEGRAM_TOKEN, GEMINI_API_KEY yoki WEATHER_API_KEY topilmadi!")
+    logger.error("TELEGRAM_TOKEN, GEMINI_API_KEY yoki WEATHER_API_KEY topilmadi!")
     exit(1)
 
 # Gemini sozlamalari
@@ -90,7 +90,7 @@ def add_user(user_id, context):
     users.add(user_id)
     context.bot_data["users"] = users
 
-# ---- Chat tarixini boshqarish ---
+# ---- Chat tarixini boshqarish ----
 def get_chat_history(context, user_id, max_length=5):
     history = context.user_data.get(user_id, {}).get("chat_history", [])
     return history[-max_length:]
@@ -135,7 +135,7 @@ def text_to_speech(text, lang="uz"):
 
 # ---- Visa yordami uchun maxsus funksiya ----
 async def handle_visa_query(update: Update, context: ContextTypes.DEFAULT_TYPE, text, history):
-    prompt = "Siz chat-bot sifatida ishlaysiz va foydalanuvchi bilan ketma-ket suhbatda javob berishingiz kerak, xuddi ChatGPT yoki Grok kabi. Foydalanuvchi savolini oldingi suhbat kontekstida hisobga oling:\n"
+    prompt = "Siz chat-bot sifatida ishlaysiz va foydalanuvchi bilan ketma-ket suhbatda javob bering, xuddi ChatGPT yoki Grok kabi. Foydalanuvchi savolini oldingi suhbat kontekstida hisobga oling:\n"
     prompt += "\n".join([f"Foydalanuvchi: {msg['user']}\nBot: {msg['bot']}" for msg in history])
     prompt += f"\nFoydalanuvchi: {text}\nBot: "
     try:
@@ -146,14 +146,15 @@ async def handle_visa_query(update: Update, context: ContextTypes.DEFAULT_TYPE, 
 
 # ---- Rasmlarni analiz qilish ----
 async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    photo = update.message.photo[-1]
+    photo = update.message.photo[-1]  # Eng katta o'lchamli rasmni olamiz
     file = await context.bot.get_file(photo.file_id)
     image_data = await file.download_as_bytearray()
     logger.info("Rasm yuklab olindi.")
 
+    # Gemini Vision orqali analiz qilish
     try:
         image = {'mime_type': 'image/jpeg', 'data': image_data}
-        prompt = "Bu rasmni tahlil qiling va tavsiflang. Agar visa bilan bog‘liq bo‘lsa, maslahat bering."
+        prompt = "Bu rasmni tahlil qiling va tavsiflang. Agar visa bilan bog'liq bo'lsa, maslahat bering."
         response = await asyncio.to_thread(model.generate_content, [image, prompt])
         await update.message.reply_text(response.text)
     except Exception as e:
@@ -215,7 +216,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---- Start va Help ----
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     add_user(update.effective_user.id, context)
-    await update.message.reply_text("Salom! Men Vizabotman 🤖. Visa yordami uchun savollaringizni matn, ovoz yoki rasm orqali bering yoki /help ni ishlat.")
+    await update.message.reply_text("Salom! Men Vizabotman 🤖. Visa yordami uchun savollaringizni bering yoki /help ni ishlat.")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
@@ -225,7 +226,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/crypto - Kripto tanlab, narxini olish\n"
         "/translate - Tilni tanlab, tarjima qilish\n"
         "/currency - Bugungi valyuta kurslari (CBU)\n"
-        "🤖 Visa yordami uchun matn, ovoz yoki rasm yuboring – ketma-ket suhbatda javob beraman!\n"
+        "🤖 Visa yoki boshqa savollar uchun matn, ovoz yoki rasm yuboring – ketma-ket suhbatda javob beraman!\n"
     )
     if update.effective_user.id == ADMIN_ID:
         text += (
@@ -399,7 +400,7 @@ def main():
     application.add_handler(CallbackQueryHandler(crypto_button, pattern="^crypto_"))
     application.add_handler(CallbackQueryHandler(lang_button, pattern="^lang_"))
 
-    # Umumiy xabar handleri (matn, ovoz, rasm)
+    # Umumiy xabar handleri (matn va ovoz)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND | filters.VOICE | filters.PHOTO, handle_message))
 
     # Scheduler (23:59 da hisobot yuboradi)
