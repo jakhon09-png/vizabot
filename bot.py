@@ -190,7 +190,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     history = get_chat_history(context, user_id)
 
     # Matnli xabar
-    if update.message.text:
+    if update.message.text and "target_lang" not in context.user_data:  # Faqat /translate tashqari matnlar
         text = update.message.text
         logger.info(f"Matnli xabar: {text}")
         update_chat_history(context, user_id, {"user": text, "bot": ""})
@@ -211,20 +211,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Noma'lum xabar. Matn, ovoz yoki rasm yuboring.")
         return
 
-    # AI javobini olish
-    user_id = update.effective_user.id
-    lang = context.user_data.get(user_id, {}).get("language", "uz")
-    prompt = f"Javobni foydalanuvchi tanlagan tilida bering ({lang}). Har qanday mavzuda yordam bering:\n"
-    prompt += "\n".join([f"Foydalanuvchi: {msg['user']}\nBot: {msg['bot']}" for msg in history])
-    prompt += f"\nFoydalanuvchi: {text}\nBot: "
-    try:
-        response = await asyncio.to_thread(model.generate_content, prompt)
-        response_text = response.text
-        update_chat_history(context, user_id, {"user": text, "bot": response_text})
-        await update.message.reply_text(f"Javob: {response_text}")
-    except Exception as e:
-        logger.error(f"AI javobida xatolik: {str(e)}")
-        await update.message.reply_text(f"Xatolik: {str(e)}")
+    # AI javobini olish (faqat /translate tashqari holatlar uchun)
+    if "target_lang" not in context.user_data:
+        user_id = update.effective_user.id
+        lang = context.user_data.get(user_id, {}).get("language", "uz")
+        prompt = f"Javobni foydalanuvchi tanlagan tilida bering ({lang}). Har qanday mavzuda yordam bering:\n"
+        prompt += "\n".join([f"Foydalanuvchi: {msg['user']}\nBot: {msg['bot']}" for msg in history])
+        prompt += f"\nFoydalanuvchi: {text}\nBot: "
+        try:
+            response = await asyncio.to_thread(model.generate_content, prompt)
+            response_text = response.text
+            update_chat_history(context, user_id, {"user": text, "bot": response_text})
+            await update.message.reply_text(f"Javob: {response_text}")
+        except Exception as e:
+            logger.error(f"AI javobida xatolik: {str(e)}")
+            await update.message.reply_text(f"Xatolik: {str(e)}")
 
 # ---- Start va Help ----
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -322,17 +323,15 @@ async def lang_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(f"✍️ Endi matn yuboring, men uni `{lang}` tiliga tarjima qilaman.")
 
 async def translate_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if "target_lang" not in context.user_data:
-        await handle_message(update, context)
-        return
-    lang = context.user_data["target_lang"]
-    text = update.message.text
-    try:
-        translated = GoogleTranslator(source="auto", target=lang).translate(text)
-        await update.message.reply_text(f"🔤 Tarjima ({lang}): {translated}")
-        del context.user_data["target_lang"]
-    except Exception as e:
-        await update.message.reply_text(f"Xatolik: {str(e)}")
+    if "target_lang" in context.user_data:
+        lang = context.user_data["target_lang"]
+        text = update.message.text
+        try:
+            translated = GoogleTranslator(source="auto", target=lang).translate(text)
+            await update.message.reply_text(f"🔤 Tarjima ({lang}): {translated}")
+            del context.user_data["target_lang"]
+        except Exception as e:
+            await update.message.reply_text(f"Xatolik: {str(e)}")
 
 # ---- CURRENCY ----
 async def currency(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -484,7 +483,7 @@ def main():
 
     # Umumiy xabar handleri (matn va ovoz)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND | filters.VOICE | filters.PHOTO, handle_message))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_presentation_topic))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, translate_message, group=1))  # Translate uchun alohida guruh
 
     # Scheduler (23:59 da hisobot yuboradi)
     scheduler = AsyncIOScheduler(timezone="Asia/Tashkent")
