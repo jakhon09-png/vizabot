@@ -8,5 +8,5 @@ SpeechRecognition
 gTTS
 pydub
 Pillow
-python-pptx  # PowerPoint uchun
-reportlab    # PDF uchun
+python-pptx
+reportlab
