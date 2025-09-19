@@ -19,6 +19,12 @@ import speech_recognition as sr
 from gtts import gTTS
 from pydub import AudioSegment
 import io
+import logging
+import json
+
+# Logging sozlamalari
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 # .env yuklash
 load_dotenv()
@@ -29,7 +35,7 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 RENDER_EXTERNAL_HOSTNAME = os.getenv("RENDER_EXTERNAL_HOSTNAME")
 
 if not TELEGRAM_TOKEN or not GEMINI_API_KEY or not WEATHER_API_KEY:
-    print("Xato: TELEGRAM_TOKEN, GEMINI_API_KEY yoki WEATHER_API_KEY topilmadi!")
+    logger.error("Xato: TELEGRAM_TOKEN, GEMINI_API_KEY yoki WEATHER_API_KEY topilmadi!")
     exit(1)
 
 # Gemini sozlamalari
@@ -89,41 +95,64 @@ def add_user(user_id, context):
     users = context.bot_data.get("users", set())
     users.add(user_id)
     context.bot_data["users"] = users
+    logger.info(f"Yangi foydalanuvchi qo‘shildi: {user_id}")
+
+# --- Loglarni saqlash ---
+def add_log(context, user_id, text):
+    logs = context.bot_data.get("logs", [])
+    logs.append((datetime.now().strftime("%H:%M"), user_id, text))
+    if len(logs) > 100:  # Maksimum 100 ta log saqlash
+        logs = logs[-100:]
+    context.bot_data["logs"] = logs
+    logger.info(f"Yangi log qo‘shildi: {user_id}, {text}")
 
 # ---- Ovozli xabarni matnga aylantirish ----
 def speech_to_text(voice_file):
     recognizer = sr.Recognizer()
-    with io.BytesIO(voice_file) as audio_file:
-        audio = AudioSegment.from_file(audio_file, format="ogg")
-        audio.export("temp.wav", format="wav")
-        with sr.AudioFile("temp.wav") as source:
-            audio_data = recognizer.record(source)
-            try:
+    try:
+        with io.BytesIO(voice_file) as audio_file:
+            audio = AudioSegment.from_file(audio_file, format="ogg")
+            audio.export("temp.wav", format="wav")
+            with sr.AudioFile("temp.wav") as source:
+                audio_data = recognizer.record(source)
                 text = recognizer.recognize_google(audio_data, language="uz-UZ")
+                logger.info(f"Matnni ovozga aylantirish muvaffaqiyatli: {text}")
                 return text
-            except sr.UnknownValueError:
-                return "Ovozli xabar tushunilmadi."
-            except sr.RequestError:
-                return "Audioni qayta ishlashda xatolik."
-            finally:
-                if os.path.exists("temp.wav"):
-                    os.remove("temp.wav")
+    except sr.UnknownValueError:
+        logger.error("Ovozli xabar tushunilmadi.")
+        return "Ovozli xabar tushunilmadi."
+    except sr.RequestError as e:
+        logger.error(f"Audioni qayta ishlashda xatolik: {str(e)}")
+        return "Audioni qayta ishlashda xatolik."
+    except Exception as e:
+        logger.error(f"Xatolik ovozli qayta ishlashda: {str(e)}")
+        return "Xatolik yuz berdi."
+    finally:
+        if os.path.exists("temp.wav"):
+            os.remove("temp.wav")
 
 # ---- Matnni ovozga aylantirish ----
 def text_to_speech(text, lang="uz"):
-    tts = gTTS(text=text, lang=lang, slow=False)
-    with io.BytesIO() as audio_file:
-        tts.write_to_fp(audio_file)
-        audio_file.seek(0)
-        return audio_file
+    try:
+        tts = gTTS(text=text, lang=lang, slow=False)
+        with io.BytesIO() as audio_file:
+            tts.write_to_fp(audio_file)
+            audio_file.seek(0)
+            logger.info("Ovozli javob tayyorlandi.")
+            return audio_file
+    except Exception as e:
+        logger.error(f"Ovozga aylantirishda xatolik: {str(e)}")
+        return None
 
 # ---- Visa yordami uchun maxsus funksiya ----
 async def handle_visa_query(update: Update, context: ContextTypes.DEFAULT_TYPE, text):
+    add_log(context, update.effective_user.id, text)
     prompt = f"Berilgan savol visa bilan bog'liq bo'lsa, maxsus visa yordami sifatida javob bering. Agar mavzu boshqa bo'lsa, umumiy javob bering: {text}"
     try:
         response = await asyncio.to_thread(model.generate_content, prompt)
         return response.text
     except Exception as e:
+        logger.error(f"Gemini javobida xatolik: {str(e)}")
         return f"Xatolik: {str(e)}"
 
 # ---- Ovozli xabar handler ----
@@ -133,28 +162,30 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text("Iltimos, ovozli xabar yuboring!")
         return
 
-    # Ovozli faylni yuklab olish
     file = await context.bot.get_file(voice.file_id)
     voice_data = await file.download_as_bytearray()
+    logger.info("Ovozli xabar yuklab olindi.")
 
-    # Matnga aylantirish
     text = speech_to_text(voice_data)
     await update.message.reply_text(f"Sizning ovozli xabaringiz: {text}")
 
-    # AI javobini olish
     response_text = await handle_visa_query(update, context, text)
     await update.message.reply_text(f"Javob: {response_text}")
 
-    # Ovozli javob tayyorlash va yuborish
     audio_file = text_to_speech(response_text, lang="uz")
-    await update.message.reply_voice(audio_file)
+    if audio_file:
+        await update.message.reply_voice(audio_file)
+    else:
+        await update.message.reply_text("Ovozli javob tayyorlanmadi, faqat matn bilan javob beraman.")
 
 # ---- Start va Help ----
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     add_user(update.effective_user.id, context)
+    add_log(context, update.effective_user.id, "/start")
     await update.message.reply_text("Salom! Men Vizabotman 🤖. Ovozli yoki matnli visa yordami uchun savollaringizni bering yoki /help ni ishlat.")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    add_log(context, update.effective_user.id, "/help")
     text = (
         "/start - Botni ishga tushirish\n"
         "/help - Yordam\n"
@@ -175,10 +206,12 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ---- My ID ----
 async def myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    add_log(context, update.effective_user.id, "/myid")
     await update.message.reply_text(f"Sizning ID: {update.effective_user.id}")
 
 # ---- WEATHER ----
 async def weather_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    add_log(context, update.effective_user.id, "/weather")
     keyboard, row = [], []
     for i, city in enumerate(UZ_CITIES, start=1):
         row.append(InlineKeyboardButton(city, callback_data=f"weather_{city}"))
@@ -209,6 +242,7 @@ async def weather_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ---- CRYPTO ----
 async def crypto_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    add_log(context, update.effective_user.id, "/crypto")
     keyboard = [[InlineKeyboardButton(coin.capitalize(), callback_data=f"crypto_{coin}")]
                 for coin in CRYPTO_COINS]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -231,6 +265,7 @@ async def crypto_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ---- TRANSLATE ----
 async def translate_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    add_log(context, update.effective_user.id, "/translate")
     keyboard = [[InlineKeyboardButton(name, callback_data=f"lang_{code}")]
                 for name, code in LANG_CODES.items()]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -245,10 +280,11 @@ async def lang_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def translate_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if "target_lang" not in context.user_data:
-        await handle_voice_message(update, context)  # Ovozli xabarlar uchun tekshiruv
+        await handle_voice_message(update, context)
         return
     lang = context.user_data["target_lang"]
     text = update.message.text
+    add_log(context, update.effective_user.id, text)
     try:
         translated = GoogleTranslator(source="auto", target=lang).translate(text)
         await update.message.reply_text(f"🔤 Tarjima ({lang}): {translated}")
@@ -258,6 +294,7 @@ async def translate_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ---- CURRENCY ----
 async def currency(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    add_log(context, update.effective_user.id, "/currency")
     url = "https://cbu.uz/oz/arkhiv-kursov-valyut/json/"
     try:
         res = requests.get(url).json()
@@ -282,6 +319,7 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     text = " ".join(context.args)
     users = context.bot_data.get("users", set())
+    logger.info(f"Broadcast boshlanmoqda. Foydalanuvchilar soni: {len(users)}")
     if not users:
         await update.message.reply_text("📭 Hali foydalanuvchi yo‘q.")
         return
@@ -290,7 +328,8 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             await context.bot.send_message(uid, f"📢 Admin xabari:\n\n{text}")
             sent += 1
-        except Exception:
+        except Exception as e:
+            logger.error(f"Xabar yuborishda xatolik ({uid}): {str(e)}")
             failed += 1
     await update.message.reply_text(f"✅ Yuborildi: {sent} ta\n❌ Xato: {failed} ta")
 
@@ -303,6 +342,7 @@ async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def send_report(context: ContextTypes.DEFAULT_TYPE):
     logs = context.bot_data.get("logs", [])
     users = context.bot_data.get("users", set())
+    logger.info(f"Hisobot tayyorlanmoqda. Foydalanuvchilar: {len(users)}, Loglar: {len(logs)}")
     if not logs:
         await context.bot.send_message(ADMIN_ID, "📊 Bugun hech qanday so‘rov bo‘lmadi.")
         return
@@ -350,11 +390,11 @@ def main():
     webhook_url = f"https://{RENDER_EXTERNAL_HOSTNAME}/{url_path}" if RENDER_EXTERNAL_HOSTNAME else None
 
     if not webhook_url:
-        print("Xato: RENDER_EXTERNAL_HOSTNAME aniqlanmadi! Polling rejimida ishlayapman.")
+        logger.info("Xato: RENDER_EXTERNAL_HOSTNAME aniqlanmadi! Polling rejimida ishlayapman.")
         application.run_polling(allowed_updates=Update.ALL_TYPES)
         scheduler.start()
     else:
-        print(f"Bot webhook bilan ishga tushmoqda: {webhook_url}")
+        logger.info(f"Bot webhook bilan ishga tushmoqda: {webhook_url}")
         application.run_webhook(
             listen="0.0.0.0",
             port=port,
