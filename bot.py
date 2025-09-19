@@ -146,7 +146,7 @@ async def handle_visa_query(update: Update, context: ContextTypes.DEFAULT_TYPE, 
 
 # ---- Rasmlarni analiz qilish ----
 async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    photo = update.message.photo[-1]  # Eng katta o'lchamli rasmni olamiz
+    photo = update.message.photo[-1]
     file = await context.bot.get_file(photo.file_id)
     image_data = await file.download_as_bytearray()
     logger.info("Rasm yuklab olindi.")
@@ -181,7 +181,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = update.message.text
         logger.info(f"Matnli xabar: {text}")
         update_chat_history(context, user_id, {"user": text, "bot": ""})
-
     # Ovozli xabar
     elif update.message.voice:
         voice = update.message.voice
@@ -191,12 +190,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = speech_to_text(voice_data)
         await update.message.reply_text(f"Sizning ovozli xabaringiz: {text}")
         update_chat_history(context, user_id, {"user": text, "bot": ""})
-
     # Rasmlar
     elif update.message.photo:
         await handle_photo_message(update, context)
         return
-
     else:
         await update.message.reply_text("Noma'lum xabar. Matn, ovoz yoki rasm yuboring.")
         return
