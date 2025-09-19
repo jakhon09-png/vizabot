@@ -6,7 +6,7 @@ deep-translator
 apscheduler
 SpeechRecognition
 gTTS
-pydub>=0.25.1
+pydub
 Pillow
-python-pptx>=0.6.21
-reportlab>=3.6.0
+python-pptx
+reportlab
