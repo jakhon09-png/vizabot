@@ -102,7 +102,7 @@ def get_chat_history(context, user_id, max_length=5):
 
 def update_chat_history(context, user_id, message):
     if user_id not in context.user_data:
-        context.user_data[user_id] = {"chat_history": []}
+        context.user_data[user_id] = {"chat_history": [], "language": "uz"}  # Default til O'zbek
     context.user_data[user_id]["chat_history"].append(message)
 
 # ---- Ovozli xabarni matnga aylantirish ----
@@ -128,6 +128,9 @@ def speech_to_text(voice_file):
 
 # ---- Matnni ovozga aylantirish ----
 def text_to_speech(text, lang="uz"):
+    # O'zbek tilini qo'llab-quvvatlash uchun fallback
+    if lang == "uz":
+        lang = "ru"  # O'zbek tilini qo'llab-quvvatlamaganligi uchun rus tiliga fallback
     try:
         tts = gTTS(text=text, lang=lang, slow=False)
         with io.BytesIO() as audio_file:
@@ -138,16 +141,21 @@ def text_to_speech(text, lang="uz"):
         logger.error(f"Ovozga aylantirishda xatolik: {str(e)}")
         return None
 
-# ---- Visa yordami uchun maxsus funksiya ----
-async def handle_visa_query(update: Update, context: ContextTypes.DEFAULT_TYPE, text, history):
-    prompt = "Siz chat-bot sifatida ishlaysiz va foydalanuvchi bilan ketma-ket suhbatda javob bering, xuddi ChatGPT yoki Grok kabi. Foydalanuvchi savolini oldingi suhbat kontekstida hisobga oling:\n"
-    prompt += "\n".join([f"Foydalanuvchi: {msg['user']}\nBot: {msg['bot']}" for msg in history])
-    prompt += f"\nFoydalanuvchi: {text}\nBot: "
-    try:
-        response = await asyncio.to_thread(model.generate_content, prompt)
-        return response.text
-    except Exception as e:
-        return f"Xatolik: {str(e)}"
+# ---- Tilni o'zgartirish ----
+async def set_language(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    keyboard = [[InlineKeyboardButton(name, callback_data=f"set_lang_{code}")]
+                for name, code in LANG_CODES.items()]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text("🔤 Qaysi tilni tanlaysiz?", reply_markup=reply_markup)
+
+async def set_language_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    lang = query.data.replace("set_lang_", "")
+    user_id = query.from_user.id
+    context.user_data[user_id]["language"] = lang
+    await query.edit_message_text(f"Til o'zgartirildi: {lang}")
 
 # ---- Rasmlarni analiz qilish ----
 async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -159,7 +167,7 @@ async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYP
     # Gemini Vision orqali analiz qilish
     try:
         image = {'mime_type': 'image/jpeg', 'data': bytes(image_data)}  # bytearray ni bytes ga aylantirish
-        prompt = "Bu rasmni tahlil qiling va tavsiflang. Agar visa bilan bog'liq bo'lsa, maslahat bering."
+        prompt = "Bu rasmni tahlil qiling va tavsiflang."
         response = await asyncio.to_thread(model.generate_content, [image, prompt])
         await update.message.reply_text(response.text)
     except Exception as e:
@@ -204,21 +212,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # AI javobini olish
-    response_text = await handle_visa_query(update, context, text, history)
-    update_chat_history(context, user_id, {"user": text, "bot": response_text})
-
-    # Javob turi
-    if update.message.voice:
-        audio_file = text_to_speech(response_text, lang="uz")
-        if audio_file:
-            await update.message.reply_voice(audio_file)
-    else:
+    user_id = update.effective_user.id
+    lang = context.user_data.get(user_id, {}).get("language", "uz")
+    prompt = f"Javobni foydalanuvchi tanlagan tilida bering ({lang}). Har qanday mavzuda yordam bering:\n"
+    prompt += "\n".join([f"Foydalanuvchi: {msg['user']}\nBot: {msg['bot']}" for msg in history])
+    prompt += f"\nFoydalanuvchi: {text}\nBot: "
+    try:
+        response = await asyncio.to_thread(model.generate_content, prompt)
+        response_text = response.text
+        update_chat_history(context, user_id, {"user": text, "bot": response_text})
         await update.message.reply_text(f"Javob: {response_text}")
+    except Exception as e:
+        logger.error(f"AI javobida xatolik: {str(e)}")
+        await update.message.reply_text(f"Xatolik: {str(e)}")
 
 # ---- Start va Help ----
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     add_user(update.effective_user.id, context)
-    await update.message.reply_text("Salom! Men Vizabotman 🤖. Visa yordami uchun savollaringizni bering yoki /help ni ishlat.")
+    await update.message.reply_text("Salom! Men AI yordamchiman 🤖. Har qanday savol bilan yordam beraman yoki /help ni ishlat.")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
@@ -229,7 +240,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/translate - Tilni tanlab, tarjima qilish\n"
         "/currency - Bugungi valyuta kurslari (CBU)\n"
         "/presentation - AI yordamida prezentatsiya tayyorlash\n"
-        "🤖 Visa yoki boshqa savollar uchun matn, ovoz yoki rasm yuboring – ketma-ket suhbatda javob beraman!\n"
+        "🤖 Har qanday savol uchun matn, ovoz yoki rasm yuboring – ketma-ket suhbatda javob beraman!\n"
     )
     if update.effective_user.id == ADMIN_ID:
         text += (
@@ -469,6 +480,7 @@ def main():
     application.add_handler(CallbackQueryHandler(weather_button, pattern="^weather_"))
     application.add_handler(CallbackQueryHandler(crypto_button, pattern="^crypto_"))
     application.add_handler(CallbackQueryHandler(lang_button, pattern="^lang_"))
+    application.add_handler(CallbackQueryHandler(set_language_button, pattern="^set_lang_"))
 
     # Umumiy xabar handleri (matn va ovoz)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND | filters.VOICE | filters.PHOTO, handle_message))
