@@ -1,12 +1,12 @@
 python-telegram-bot[webhooks]==21.7
-openai==1.35.7
+openai==1.44.0  # Yangi versiya
 python-dotenv
 requests
 deep-translator
 apscheduler
 SpeechRecognition
 gTTS
-pydub
+pydub==0.25.1  # Sintaksis ogohlantirishlarini kamaytirish uchun
 Pillow
 python-pptx
 reportlab

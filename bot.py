@@ -46,7 +46,7 @@ if not TELEGRAM_TOKEN or not GROK_API_KEY or not WEATHER_API_KEY:
 # Grok sozlamalari
 client = OpenAI(
     api_key=GROK_API_KEY,
-    base_url="https://api.x.ai/v1"
+    base_url="https://api.x.ai/v1"  # Grok API uchun base URL
 )
 
 # 🌤 O‘zbekiston shaharlar ro‘yxati
