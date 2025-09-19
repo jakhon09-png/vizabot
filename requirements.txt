@@ -1,5 +1,5 @@
-python-telegram-bot[webhooks]==20.4
-openai==1.35.7  # Grok uchun OpenAI SDK
+python-telegram-bot[webhooks]==21.7
+openai==1.35.7
 python-dotenv
 requests
 deep-translator

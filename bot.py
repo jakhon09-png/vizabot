@@ -46,7 +46,7 @@ if not TELEGRAM_TOKEN or not GROK_API_KEY or not WEATHER_API_KEY:
 # Grok sozlamalari
 client = OpenAI(
     api_key=GROK_API_KEY,
-    base_url="https://api.x.ai/v1"  # Grok API uchun base URL
+    base_url="https://api.x.ai/v1"
 )
 
 # 🌤 O‘zbekiston shaharlar ro‘yxati
@@ -104,7 +104,7 @@ def get_chat_history(context, user_id, max_length=5):
 
 def update_chat_history(context, user_id, message):
     if user_id not in context.user_data:
-        context.user_data[user_id] = {"chat_history": [], "language": "uz"}  # Default til O'zbek
+        context.user_data[user_id] = {"chat_history": [], "language": "uz"}
     context.user_data[user_id]["chat_history"].append(message)
 
 # ---- Ovozli xabarni matnga aylantirish ----
@@ -131,7 +131,7 @@ def speech_to_text(voice_file):
 # ---- Matnni ovozga aylantirish ----
 def text_to_speech(text, lang="uz"):
     if lang == "uz":
-        lang = "ru"  # O'zbek tilini qo'llab-quvvatlamaganligi uchun rus tiliga fallback
+        lang = "ru"
     try:
         tts = gTTS(text=text, lang=lang, slow=False)
         with io.BytesIO() as audio_file:
@@ -165,12 +165,11 @@ async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYP
     image_data = await file.download_as_bytearray()
     logger.info("Rasm yuklab olindi.")
 
-    # Grok Vision orqali analiz qilish
     try:
         image = {"mime_type": "image/jpeg", "data": bytes(image_data)}
         prompt = "Bu rasmni tahlil qiling va tavsiflang."
         response = client.chat.completions.create(
-            model="grok-1-vision",  # Grok Vision modeli
+            model="grok-1-vision",
             messages=[{"role": "user", "content": [{"type": "text", "text": prompt}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_data.hex()}"}}]}],
             max_tokens=500
         )
@@ -184,22 +183,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     add_user(user_id, context)
 
-    # Antispam
     last_message_time = context.user_data.get("last_message_time", None)
     if last_message_time and datetime.now() < last_message_time + timedelta(seconds=5):
         await update.message.reply_text("⏳ Iltimos, biroz kuting!")
         return
     context.user_data["last_message_time"] = datetime.now()
 
-    # Chat tarixini olish
     history = get_chat_history(context, user_id)
 
-    # Matnli xabar
     if update.message.text and "target_lang" not in context.user_data:
         text = update.message.text
         logger.info(f"Matnli xabar: {text}")
         update_chat_history(context, user_id, {"user": text, "bot": ""})
-    # Ovozli xabar
     elif update.message.voice:
         voice = update.message.voice
         file = await context.bot.get_file(voice.file_id)
@@ -208,7 +203,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = speech_to_text(voice_data)
         await update.message.reply_text(f"Sizning ovozli xabaringiz: {text}")
         update_chat_history(context, user_id, {"user": text, "bot": ""})
-    # Rasmlar
     elif update.message.photo:
         await handle_photo_message(update, context)
         return
@@ -216,7 +210,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Noma'lum xabar. Matn, ovoz yoki rasm yuboring.")
         return
 
-    # Grok javobini olish
     if "target_lang" not in context.user_data:
         user_id = update.effective_user.id
         lang = context.user_data.get(user_id, {}).get("language", "uz")
@@ -225,7 +218,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         prompt += f"\nFoydalanuvchi: {text}\nBot: "
         try:
             response = client.chat.completions.create(
-                model="grok-1",  # Grok matn modeli
+                model="grok-1",
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=500,
                 temperature=0.7
@@ -425,7 +418,6 @@ async def handle_presentation_topic(update: Update, context: ContextTypes.DEFAUL
         topic = update.message.text
         await update.message.reply_text(f"📝 '{topic}' bo'yicha prezentatsiya tayyorlanmoqda... Iltimos, kuting.")
         
-        # Grok orqali prezentatsiya matnini generatsiya qilish
         prompt = f"Siz AI yordamchisiz. Quyidagi mavzu bo'yicha qisqa prezentatsiya matni yarating: {topic}. Strukturani quyidagi tarzda saqlang:\n- Sarlavha\n- Kirish (2-3 jumlali)\n- Asosiy qism (3 ta asosiy nuqta bilan)\n- Xulosa (1-2 jumlali)\nNatijani faqat matn sifatida qaytaring, hech qanday qo'shimcha izohsiz."
         try:
             response = client.chat.completions.create(
@@ -436,7 +428,6 @@ async def handle_presentation_topic(update: Update, context: ContextTypes.DEFAUL
             presentation_text = response.choices[0].message.content.split('\n')
             logger.info(f"Generatsiya qilingan matn: {presentation_text}")
 
-            # PowerPoint yaratish
             ppt = Presentation()
             title_slide_layout = ppt.slide_layouts[0]
             slide = ppt.slides.add_slide(title_slide_layout)
@@ -445,7 +436,6 @@ async def handle_presentation_topic(update: Update, context: ContextTypes.DEFAUL
             title.text = presentation_text[0] if presentation_text else topic
             subtitle.text = "Tayyorlandi: " + datetime.now().strftime("%Y-%m-%d %H:%M")
 
-            # Asosiy slaydlar
             body_slide_layout = ppt.slide_layouts[1]
             for line in presentation_text[1:]:
                 if line.strip():
@@ -455,13 +445,11 @@ async def handle_presentation_topic(update: Update, context: ContextTypes.DEFAUL
                     title.text = line.strip()
                     body.text = "Tafsilotlar bu yerda bo‘ladi..."
 
-            # PowerPoint faylini saqlash
             ppt_io = io.BytesIO()
             ppt.save(ppt_io)
             ppt_io.seek(0)
             logger.info("PowerPoint fayli muvaffaqiyatli yaratildi.")
 
-            # PDF yaratish
             pdf_io = io.BytesIO()
             doc = SimpleDocTemplate(pdf_io, pagesize=letter)
             styles = getSampleStyleSheet()
@@ -474,7 +462,6 @@ async def handle_presentation_topic(update: Update, context: ContextTypes.DEFAUL
             pdf_io.seek(0)
             logger.info("PDF fayli muvaffaqiyatli yaratildi.")
 
-            # Telegram’da fayllarni yuborish
             await update.message.reply_document(document=ppt_io, filename=f"{topic}_presentation.pptx")
             await update.message.reply_document(document=pdf_io, filename=f"{topic}_presentation.pdf")
             await update.message.reply_text("🎉 Prezentatsiya PowerPoint (.pptx) va PDF formatida yuborildi!")
