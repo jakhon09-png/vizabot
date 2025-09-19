@@ -10,7 +10,7 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
-import google.generativeai as genai
+from openai import OpenAI
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
 from deep_translator import GoogleTranslator
@@ -34,18 +34,20 @@ logger = logging.getLogger(__name__)
 # .env yuklash
 load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GROK_API_KEY = os.getenv("GROK_API_KEY")
 WEATHER_API_KEY = os.getenv("WEATHER_API_KEY")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 RENDER_EXTERNAL_HOSTNAME = os.getenv("RENDER_EXTERNAL_HOSTNAME")
 
-if not TELEGRAM_TOKEN or not GEMINI_API_KEY or not WEATHER_API_KEY:
-    logger.error("TELEGRAM_TOKEN, GEMINI_API_KEY yoki WEATHER_API_KEY topilmadi!")
+if not TELEGRAM_TOKEN or not GROK_API_KEY or not WEATHER_API_KEY:
+    logger.error("TELEGRAM_TOKEN, GROK_API_KEY yoki WEATHER_API_KEY topilmadi!")
     exit(1)
 
-# Gemini sozlamalari
-genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel("gemini-1.5-flash")
+# Grok sozlamalari
+client = OpenAI(
+    api_key=GROK_API_KEY,
+    base_url="https://api.x.ai/v1"  # Grok API uchun base URL
+)
 
 # 🌤 O‘zbekiston shaharlar ro‘yxati
 UZ_CITIES = [
@@ -128,7 +130,6 @@ def speech_to_text(voice_file):
 
 # ---- Matnni ovozga aylantirish ----
 def text_to_speech(text, lang="uz"):
-    # O'zbek tilini qo'llab-quvvatlash uchun fallback
     if lang == "uz":
         lang = "ru"  # O'zbek tilini qo'llab-quvvatlamaganligi uchun rus tiliga fallback
     try:
@@ -164,12 +165,16 @@ async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYP
     image_data = await file.download_as_bytearray()
     logger.info("Rasm yuklab olindi.")
 
-    # Gemini Vision orqali analiz qilish
+    # Grok Vision orqali analiz qilish
     try:
-        image = {'mime_type': 'image/jpeg', 'data': bytes(image_data)}  # bytearray ni bytes ga aylantirish
+        image = {"mime_type": "image/jpeg", "data": bytes(image_data)}
         prompt = "Bu rasmni tahlil qiling va tavsiflang."
-        response = await asyncio.to_thread(model.generate_content, [image, prompt])
-        await update.message.reply_text(response.text)
+        response = client.chat.completions.create(
+            model="grok-1-vision",  # Grok Vision modeli
+            messages=[{"role": "user", "content": [{"type": "text", "text": prompt}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_data.hex()}"}}]}],
+            max_tokens=500
+        )
+        await update.message.reply_text(response.choices[0].message.content)
     except Exception as e:
         logger.error(f"Rasm analizida xatolik: {str(e)}")
         await update.message.reply_text(f"Rasm analizida xatolik: {str(e)}")
@@ -190,7 +195,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     history = get_chat_history(context, user_id)
 
     # Matnli xabar
-    if update.message.text and "target_lang" not in context.user_data:  # Faqat /translate tashqari matnlar
+    if update.message.text and "target_lang" not in context.user_data:
         text = update.message.text
         logger.info(f"Matnli xabar: {text}")
         update_chat_history(context, user_id, {"user": text, "bot": ""})
@@ -211,20 +216,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Noma'lum xabar. Matn, ovoz yoki rasm yuboring.")
         return
 
-    # AI javobini olish (faqat /translate tashqari holatlar uchun)
+    # Grok javobini olish
     if "target_lang" not in context.user_data:
         user_id = update.effective_user.id
         lang = context.user_data.get(user_id, {}).get("language", "uz")
-        prompt = f"Javobni foydalanuvchi tanlagan tilida bering ({lang}). Har qanday mavzuda yordam bering:\n"
+        prompt = f"Javobni {lang} tilida bering. Har qanday mavzuda yordam bering:\n"
         prompt += "\n".join([f"Foydalanuvchi: {msg['user']}\nBot: {msg['bot']}" for msg in history])
         prompt += f"\nFoydalanuvchi: {text}\nBot: "
         try:
-            response = await asyncio.to_thread(model.generate_content, prompt)
-            response_text = response.text
+            response = client.chat.completions.create(
+                model="grok-1",  # Grok matn modeli
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=500,
+                temperature=0.7
+            )
+            response_text = response.choices[0].message.content
             update_chat_history(context, user_id, {"user": text, "bot": response_text})
             await update.message.reply_text(f"Javob: {response_text}")
         except Exception as e:
-            logger.error(f"AI javobida xatolik: {str(e)}")
+            logger.error(f"Grok javobida xatolik: {str(e)}")
             await update.message.reply_text(f"Xatolik: {str(e)}")
 
 # ---- Start va Help ----
@@ -327,11 +337,23 @@ async def translate_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lang = context.user_data["target_lang"]
         text = update.message.text
         try:
-            translated = GoogleTranslator(source="auto", target=lang).translate(text)
+            prompt = f"Translate the following text into {lang}: {text}"
+            response = client.chat.completions.create(
+                model="grok-1",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=500
+            )
+            translated = response.choices[0].message.content
             await update.message.reply_text(f"🔤 Tarjima ({lang}): {translated}")
             del context.user_data["target_lang"]
         except Exception as e:
-            await update.message.reply_text(f"Xatolik: {str(e)}")
+            logger.error(f"Tarjima xatoligi: {str(e)}")
+            try:
+                translated = GoogleTranslator(source="auto", target=lang).translate(text)
+                await update.message.reply_text(f"🔤 Tarjima ({lang}): {translated}")
+                del context.user_data["target_lang"]
+            except Exception as e2:
+                await update.message.reply_text(f"❌ Tarjima xatoligi: {str(e2)}")
 
 # ---- CURRENCY ----
 async def currency(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -403,11 +425,15 @@ async def handle_presentation_topic(update: Update, context: ContextTypes.DEFAUL
         topic = update.message.text
         await update.message.reply_text(f"📝 '{topic}' bo'yicha prezentatsiya tayyorlanmoqda... Iltimos, kuting.")
         
-        # AI orqali prezentatsiya matnini generatsiya qilish
+        # Grok orqali prezentatsiya matnini generatsiya qilish
         prompt = f"Siz AI yordamchisiz. Quyidagi mavzu bo'yicha qisqa prezentatsiya matni yarating: {topic}. Strukturani quyidagi tarzda saqlang:\n- Sarlavha\n- Kirish (2-3 jumlali)\n- Asosiy qism (3 ta asosiy nuqta bilan)\n- Xulosa (1-2 jumlali)\nNatijani faqat matn sifatida qaytaring, hech qanday qo'shimcha izohsiz."
         try:
-            response = await asyncio.to_thread(model.generate_content, prompt)
-            presentation_text = response.text.split('\n')
+            response = client.chat.completions.create(
+                model="grok-1",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=1000
+            )
+            presentation_text = response.choices[0].message.content.split('\n')
             logger.info(f"Generatsiya qilingan matn: {presentation_text}")
 
             # PowerPoint yaratish
@@ -416,7 +442,7 @@ async def handle_presentation_topic(update: Update, context: ContextTypes.DEFAUL
             slide = ppt.slides.add_slide(title_slide_layout)
             title = slide.shapes.title
             subtitle = slide.placeholders[1]
-            title.text = presentation_text[0]  # Sarlavha
+            title.text = presentation_text[0] if presentation_text else topic
             subtitle.text = "Tayyorlandi: " + datetime.now().strftime("%Y-%m-%d %H:%M")
 
             # Asosiy slaydlar
@@ -451,11 +477,10 @@ async def handle_presentation_topic(update: Update, context: ContextTypes.DEFAUL
             # Telegram’da fayllarni yuborish
             await update.message.reply_document(document=ppt_io, filename=f"{topic}_presentation.pptx")
             await update.message.reply_document(document=pdf_io, filename=f"{topic}_presentation.pdf")
-
             await update.message.reply_text("🎉 Prezentatsiya PowerPoint (.pptx) va PDF formatida yuborildi!")
         except Exception as e:
             logger.error(f"Prezentatsiya yaratishda xatolik: {str(e)}")
-            await update.message.reply_text(f"❌ Prezentatsiya yaratishda xatolik: {str(e)}. Faqat matn:\n\n" + "\n".join(presentation_text))
+            await update.message.reply_text(f"❌ Prezentatsiya yaratishda xatolik: {str(e)}")
         
         del context.user_data["awaiting_presentation_topic"]
 
@@ -481,11 +506,11 @@ def main():
     application.add_handler(CallbackQueryHandler(lang_button, pattern="^lang_"))
     application.add_handler(CallbackQueryHandler(set_language_button, pattern="^set_lang_"))
 
-    # Umumiy xabar handleri (matn va ovoz)
+    # Umumiy xabar handleri
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND | filters.VOICE | filters.PHOTO, handle_message))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, translate_message, group=1))  # Translate uchun alohida guruh
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, translate_message, group=1))
 
-    # Scheduler (23:59 da hisobot yuboradi)
+    # Scheduler
     scheduler = AsyncIOScheduler(timezone="Asia/Tashkent")
     scheduler.add_job(send_report, "cron", hour=23, minute=59, args=[application])
 
