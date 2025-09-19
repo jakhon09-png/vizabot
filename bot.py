@@ -158,7 +158,7 @@ async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYP
 
     # Gemini Vision orqali analiz qilish
     try:
-        image = {'mime_type': 'image/jpeg', 'data': image_data}
+        image = {'mime_type': 'image/jpeg', 'data': bytes(image_data)}  # bytearray ni bytes ga aylantirish
         prompt = "Bu rasmni tahlil qiling va tavsiflang. Agar visa bilan bog'liq bo'lsa, maslahat bering."
         response = await asyncio.to_thread(model.generate_content, [image, prompt])
         await update.message.reply_text(response.text)
@@ -398,6 +398,7 @@ async def handle_presentation_topic(update: Update, context: ContextTypes.DEFAUL
         try:
             response = await asyncio.to_thread(model.generate_content, prompt)
             presentation_text = response.text.split('\n')
+            logger.info(f"Generatsiya qilingan matn: {presentation_text}")
 
             # PowerPoint yaratish
             ppt = Presentation()
@@ -422,6 +423,7 @@ async def handle_presentation_topic(update: Update, context: ContextTypes.DEFAUL
             ppt_io = io.BytesIO()
             ppt.save(ppt_io)
             ppt_io.seek(0)
+            logger.info("PowerPoint fayli muvaffaqiyatli yaratildi.")
 
             # PDF yaratish
             pdf_io = io.BytesIO()
@@ -434,6 +436,7 @@ async def handle_presentation_topic(update: Update, context: ContextTypes.DEFAUL
                     story.append(Spacer(1, 12))
             doc.build(story)
             pdf_io.seek(0)
+            logger.info("PDF fayli muvaffaqiyatli yaratildi.")
 
             # Telegram’da fayllarni yuborish
             await update.message.reply_document(document=ppt_io, filename=f"{topic}_presentation.pptx")
@@ -441,7 +444,8 @@ async def handle_presentation_topic(update: Update, context: ContextTypes.DEFAUL
 
             await update.message.reply_text("🎉 Prezentatsiya PowerPoint (.pptx) va PDF formatida yuborildi!")
         except Exception as e:
-            await update.message.reply_text(f"❌ Xatolik: {str(e)}")
+            logger.error(f"Prezentatsiya yaratishda xatolik: {str(e)}")
+            await update.message.reply_text(f"❌ Prezentatsiya yaratishda xatolik: {str(e)}. Faqat matn:\n\n" + "\n".join(presentation_text))
         
         del context.user_data["awaiting_presentation_topic"]
 
