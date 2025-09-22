@@ -1,5 +1,4 @@
-python-telegram-bot[webhooks]==21.7  # Aniqlangan versiya
-openai==1.45.0
+python-telegram-bot[webhooks]==21.7
 python-dotenv
 requests
 deep-translator
@@ -10,4 +9,3 @@ pydub==0.25.1
 Pillow
 python-pptx
 reportlab
-httpx

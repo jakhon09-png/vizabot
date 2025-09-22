@@ -10,8 +10,6 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
-from openai import OpenAI
-import httpx
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
 from deep_translator import GoogleTranslator
@@ -44,11 +42,29 @@ if not TELEGRAM_TOKEN or not GROK_API_KEY or not WEATHER_API_KEY:
     logger.error("TELEGRAM_TOKEN, GROK_API_KEY yoki WEATHER_API_KEY topilmadi!")
     exit(1)
 
-# Grok sozlamalari
-client = OpenAI(
-    api_key=GROK_API_KEY,
-    http_client=httpx.Client(base_url="https://api.x.ai/v1")
-)
+# Grok API sozlamalari
+GROK_API_BASE_URL = "https://api.x.ai/v1/chat/completions"
+GROK_MODEL = "grok-1"
+
+# Grok orqali matn generatsiya qilish funksiyasi
+async def grok_generate_content(prompt, max_tokens=500, temperature=0.7):
+    headers = {
+        "Authorization": f"Bearer {GROK_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    data = {
+        "model": GROK_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": max_tokens,
+        "temperature": temperature
+    }
+    try:
+        response = requests.post(GROK_API_BASE_URL, headers=headers, json=data, timeout=10)
+        response.raise_for_status()
+        return response.json()["choices"][0]["message"]["content"]
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Grok API xatoligi: {str(e)}")
+        return f"Xatolik: {str(e)}"
 
 # 🌤 O‘zbekiston shaharlar ro‘yxati
 UZ_CITIES = [
@@ -132,7 +148,7 @@ def speech_to_text(voice_file):
 # ---- Matnni ovozga aylantirish ----
 def text_to_speech(text, lang="uz"):
     if lang == "uz":
-        lang = "ru"
+        lang = "ru"  # gTTS uchun O‘zbek tilida yo‘q, shuning uchun Rus tiliga o‘taman
     try:
         tts = gTTS(text=text, lang=lang, slow=False)
         with io.BytesIO() as audio_file:
@@ -167,14 +183,23 @@ async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYP
     logger.info("Rasm yuklab olindi.")
 
     try:
-        image = {"mime_type": "image/jpeg", "data": bytes(image_data)}
+        base64_image = image_data.hex()  # Hex formatida aylantirish
+        headers = {
+            "Authorization": f"Bearer {GROK_API_KEY}",
+            "Content-Type": "application/json"
+        }
         prompt = "Bu rasmni tahlil qiling va tavsiflang."
-        response = client.chat.completions.create(
-            model="grok-1-vision",
-            messages=[{"role": "user", "content": [{"type": "text", "text": prompt}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_data.hex()}"}}]}],
-            max_tokens=500
-        )
-        await update.message.reply_text(response.choices[0].message.content)
+        data = {
+            "model": "grok-1-vision",
+            "messages": [{"role": "user", "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
+            ]}],
+            "max_tokens": 500
+        }
+        response = requests.post(GROK_API_BASE_URL, headers=headers, json=data, timeout=10)
+        response.raise_for_status()
+        await update.message.reply_text(response.json()["choices"][0]["message"]["content"])
     except Exception as e:
         logger.error(f"Rasm analizida xatolik: {str(e)}")
         await update.message.reply_text(f"Rasm analizida xatolik: {str(e)}")
@@ -218,13 +243,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         prompt += "\n".join([f"Foydalanuvchi: {msg['user']}\nBot: {msg['bot']}" for msg in history])
         prompt += f"\nFoydalanuvchi: {text}\nBot: "
         try:
-            response = client.chat.completions.create(
-                model="grok-1",
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=500,
-                temperature=0.7
-            )
-            response_text = response.choices[0].message.content
+            response_text = await grok_generate_content(prompt)
             update_chat_history(context, user_id, {"user": text, "bot": response_text})
             await update.message.reply_text(f"Javob: {response_text}")
         except Exception as e:
@@ -262,14 +281,7 @@ async def myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ---- WEATHER ----
 async def weather_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard, row = [], []
-    for i, city in enumerate(UZ_CITIES, start=1):
-        row.append(InlineKeyboardButton(city, callback_data=f"weather_{city}"))
-        if i % 3 == 0:
-            keyboard.append(row)
-            row = []
-    if row:
-        keyboard.append(row)
+    keyboard = [[InlineKeyboardButton(city, callback_data=f"weather_{city}")] for city in UZ_CITIES]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text("🌤 Qaysi shahar ob-havosini bilmoqchisiz?", reply_markup=reply_markup)
 
@@ -279,7 +291,7 @@ async def weather_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     city = query.data.replace("weather_", "")
     url = f"http://api.openweathermap.org/data/2.5/weather?q={city}&appid={WEATHER_API_KEY}&units=metric&lang=en"
     try:
-        res = requests.get(url).json()
+        res = requests.get(url, timeout=10).json()
         if res.get("cod") != 200:
             await query.edit_message_text(f"❌ Ob-havo topilmadi: {city}")
             return
@@ -303,7 +315,7 @@ async def crypto_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     coin = query.data.replace("crypto_", "")
     url = f"https://api.coingecko.com/api/v3/simple/price?ids={coin}&vs_currencies=usd"
     try:
-        res = requests.get(url).json()
+        res = requests.get(url, timeout=10).json()
         if coin not in res:
             await query.edit_message_text(f"❌ Kripto topilmadi: {coin}")
             return
@@ -332,13 +344,8 @@ async def translate_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = update.message.text
         try:
             prompt = f"Translate the following text into {lang}: {text}"
-            response = client.chat.completions.create(
-                model="grok-1",
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=500
-            )
-            translated = response.choices[0].message.content
-            await update.message.reply_text(f"🔤 Tarjima ({lang}): {translated}")
+            response_text = await grok_generate_content(prompt)
+            await update.message.reply_text(f"🔤 Tarjima ({lang}): {response_text}")
             del context.user_data["target_lang"]
         except Exception as e:
             logger.error(f"Tarjima xatoligi: {str(e)}")
@@ -353,7 +360,7 @@ async def translate_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def currency(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = "https://cbu.uz/oz/arkhiv-kursov-valyut/json/"
     try:
-        res = requests.get(url).json()
+        res = requests.get(url, timeout=10).json()
         if not res:
             await update.message.reply_text("❌ Valyuta kurslari topilmadi.")
             return
@@ -421,12 +428,8 @@ async def handle_presentation_topic(update: Update, context: ContextTypes.DEFAUL
         
         prompt = f"Siz AI yordamchisiz. Quyidagi mavzu bo'yicha qisqa prezentatsiya matni yarating: {topic}. Strukturani quyidagi tarzda saqlang:\n- Sarlavha\n- Kirish (2-3 jumlali)\n- Asosiy qism (3 ta asosiy nuqta bilan)\n- Xulosa (1-2 jumlali)\nNatijani faqat matn sifatida qaytaring, hech qanday qo'shimcha izohsiz."
         try:
-            response = client.chat.completions.create(
-                model="grok-1",
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=1000
-            )
-            presentation_text = response.choices[0].message.content.split('\n')
+            response_text = await grok_generate_content(prompt, max_tokens=1000)
+            presentation_text = response_text.split('\n')
             logger.info(f"Generatsiya qilingan matn: {presentation_text}")
 
             ppt = Presentation()
@@ -496,7 +499,7 @@ def main():
 
     # Umumiy xabar handleri
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND | filters.VOICE | filters.PHOTO, handle_message))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, translate_message))  # group olib tashlandi
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, translate_message))
 
     # Scheduler
     scheduler = AsyncIOScheduler(timezone="Asia/Tashkent")
