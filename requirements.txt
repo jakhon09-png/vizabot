@@ -1,5 +1,5 @@
-python-telegram-bot[webhooks]==21.7
-openai==1.45.0  # Eng so'nggi versiya
+python-telegram-bot[webhooks]==21.7  # Aniqlangan versiya
+openai==1.45.0
 python-dotenv
 requests
 deep-translator
@@ -10,4 +10,4 @@ pydub==0.25.1
 Pillow
 python-pptx
 reportlab
-httpx  # Maxsus HTTP klienti uchun
+httpx

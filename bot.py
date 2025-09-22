@@ -47,7 +47,7 @@ if not TELEGRAM_TOKEN or not GROK_API_KEY or not WEATHER_API_KEY:
 # Grok sozlamalari
 client = OpenAI(
     api_key=GROK_API_KEY,
-    http_client=httpx.Client(base_url="https://api.x.ai/v1")  # Maxsus HTTP klienti
+    http_client=httpx.Client(base_url="https://api.x.ai/v1")
 )
 
 # 🌤 O‘zbekiston shaharlar ro‘yxati
@@ -496,7 +496,7 @@ def main():
 
     # Umumiy xabar handleri
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND | filters.VOICE | filters.PHOTO, handle_message))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, translate_message, group=1))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, translate_message))  # group olib tashlandi
 
     # Scheduler
     scheduler = AsyncIOScheduler(timezone="Asia/Tashkent")
