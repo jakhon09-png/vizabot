@@ -501,9 +501,11 @@ def main():
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND | filters.VOICE | filters.PHOTO, handle_message))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, translate_message))
 
-    # Scheduler
-    scheduler = AsyncIOScheduler(timezone="Asia/Tashkent")
+    # Scheduler ni moslashtirish
+    scheduler = AsyncIOScheduler()
     scheduler.add_job(send_report, "cron", hour=23, minute=59, args=[application])
+    loop = asyncio.get_event_loop()
+    loop.create_task(scheduler.start())
 
     # Webhook yoki polling
     port = int(os.environ.get("PORT", 8443))
@@ -513,7 +515,6 @@ def main():
     if not webhook_url:
         logger.info("Xato: RENDER_EXTERNAL_HOSTNAME aniqlanmadi! Polling rejimida ishlayapman.")
         application.run_polling(allowed_updates=Update.ALL_TYPES)
-        scheduler.start()
     else:
         logger.info(f"Bot webhook bilan ishga tushmoqda: {webhook_url}")
         application.run_webhook(
@@ -523,7 +524,6 @@ def main():
             webhook_url=webhook_url,
             allowed_updates=Update.ALL_TYPES
         )
-        scheduler.start()
 
 if __name__ == "__main__":
     main()
