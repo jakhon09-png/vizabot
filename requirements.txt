@@ -4,8 +4,8 @@ requests
 deep-translator
 apscheduler
 SpeechRecognition
-gTTS
-pydub>=0.26.0  # Yangi versiya
+gTTS==2.5.4
+pydub==0.25.1  # To‘g‘rilangan versiya
 Pillow
 python-pptx
 reportlab
