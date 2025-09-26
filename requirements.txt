@@ -1,9 +1,13 @@
+pip>=25.2
+setuptools>=70.0
+wheel>=0.44
+
 python-telegram-bot==20.6
 requests==2.31.0
 python-dotenv==1.0.0
 deep-translator==1.11.4
 apscheduler==3.10.4
-SpeechRecognition==3.10.1
+SpeechRecognition==3.10.0
 gTTS==2.4.0
 pydub==0.25.1
 Pillow==10.0.0
