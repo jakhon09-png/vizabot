@@ -45,7 +45,7 @@ if not TELEGRAM_TOKEN or not GEMINI_API_KEY or not WEATHER_API_KEY:
 
 # Gemini sozlamalari
 genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel("gemini-1.5-flash")
+model = genai.GenerativeModel("gemini-2.5-flash")  # Yangilangan model
 
 # 🌤 O‘zbekiston shaharlar ro‘yxati
 UZ_CITIES = [
@@ -165,10 +165,6 @@ async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYP
 
     try:
         base64_image = image_data.hex()
-        headers = {
-            "Authorization": f"Bearer {GEMINI_API_KEY}",
-            "Content-Type": "application/json"
-        }
         prompt = "Bu rasmni tahlil qiling va tavsiflang."
         response = model.generate_content([prompt, {"mime_type": "image/jpeg", "data": base64_image}])
         await update.message.reply_text(response.text)

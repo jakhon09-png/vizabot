@@ -1,5 +1,5 @@
 python-telegram-bot[webhooks]==21.7
-google-generativeai==0.8.3  # Gemini uchun
+google-generativeai==0.8.3
 python-dotenv
 requests
 deep-translator
