@@ -19,12 +19,13 @@ from gtts import gTTS
 from pydub import AudioSegment
 import io
 import logging
+from PIL import Image
 from pptx import Presentation
 from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
 
-# Logging sozlamalari
+# Logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -37,15 +38,15 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 RENDER_EXTERNAL_HOSTNAME = os.getenv("RENDER_EXTERNAL_HOSTNAME")
 
 if not TELEGRAM_TOKEN or not GROK_API_KEY or not WEATHER_API_KEY:
-    logger.error("TELEGRAM_TOKEN, GROK_API_KEY yoki WEATHER_API_KEY .env faylda topilmadi!")
+    logger.error("TELEGRAM_TOKEN, GROK_API_KEY yoki WEATHER_API_KEY topilmadi!")
     exit(1)
 
 # Grok API sozlamalari
 GROK_API_BASE_URL = "https://api.x.ai/v1/chat/completions"
-GROK_MODEL = "llama3-8b-8192" # Yoki boshqa mavjud model, masalan: "grok-1.5-flash"
+GROK_MODEL = "grok-beta"
 
 # Grok orqali matn generatsiya qilish funksiyasi
-async def grok_generate_content(prompt, max_tokens=1024, temperature=0.7):
+def grok_generate_content(prompt, max_tokens=500, temperature=0.7):
     headers = {
         "Authorization": f"Bearer {GROK_API_KEY}",
         "Content-Type": "application/json"
@@ -57,24 +58,28 @@ async def grok_generate_content(prompt, max_tokens=1024, temperature=0.7):
         "temperature": temperature
     }
     try:
-        response = requests.post(GROK_API_BASE_URL, headers=headers, json=data, timeout=30)
-        response.raise_for_status()
-        return response.json()["choices"][0]["message"]["content"]
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Grok API xatoligi: {str(e)}")
-        return f"Groq API bilan bog'lanishda xatolik yuz berdi. Iltimos, keyinroq qayta urining."
+        resp = requests.post(GROK_API_BASE_URL, headers=headers, json=data, timeout=30)
+        resp.raise_for_status()
+        j = resp.json()
+        # Defensive access
+        choice = j.get("choices")
+        if choice and isinstance(choice, list):
+            message = choice[0].get("message")
+            if message:
+                return message.get("content", "")
+        # Fallback to raw text if present
+        return j.get("text", str(j))
+    except Exception as e:
+        logger.error(f"Grok API xatoligi: {e}")
+        return f"Xatolik: {e}"
 
-# 🌤 O‘zbekiston shaharlar ro‘yxati
+# --- Helper functions (unchanged lists) ---
 UZ_CITIES = [
     "Tashkent", "Samarkand", "Bukhara", "Khiva", "Andijan", "Namangan",
     "Fergana", "Kokand", "Jizzakh", "Navoiy", "Qarshi", "Termez",
     "Gulistan", "Shahrisabz", "Urgench"
 ]
-
-# 💰 Mashhur kriptovalyutalar
-CRYPTO_COINS = ["bitcoin", "ethereum", "tether", "binancecoin", "solana", "dogecoin"]
-
-# 🔤 Tarjima tillari
+CRYPTO_COINS = ["bitcoin", "ethereum", "tether", "bnb", "solana", "dogecoin"]
 LANG_CODES = {
     "🇺🇸 Ingliz": "en",
     "🇷🇺 Rus": "ru",
@@ -83,70 +88,107 @@ LANG_CODES = {
     "🇩🇪 Nemis": "de",
     "🇫🇷 Fransuz": "fr"
 }
-
-# 🌤 Inglizcha → O‘zbekcha ob-havo tarjimalari
 WEATHER_CONDITIONS = {
-    "clear sky": "ochiq osmon", "few clouds": "biroz bulutli", "scattered clouds": "tarqoq bulutlar",
-    "broken clouds": "parcha bulutlar", "overcast clouds": "to‘liq bulutli", "shower rain": "jala",
-    "light rain": "yengil yomg‘ir", "moderate rain": "o‘rtacha yomg‘ir", "heavy intensity rain": "kuchli yomg‘ir",
-    "rain": "yomg‘ir", "snow": "qor", "mist": "tuman", "thunderstorm": "momaqaldiroq",
-    "fog": "quyuq tuman", "haze": "g'ubor", "dust": "chang", "sand": "qum", "tornado": "tornado"
+    "clear sky": "ochiq osmon",
+    "few clouds": "biroz bulutli",
+    "scattered clouds": "sochma bulutlar",
+    "broken clouds": "qisman bulutli",
+    "overcast clouds": "to‘liq bulutli",
+    "shower rain": "jala",
+    "light rain": "yengil yomg‘ir",
+    "moderate rain": "o‘rtacha yomg‘ir",
+    "heavy intensity rain": "kuchli yomg‘ir",
+    "rain": "yomg‘ir",
+    "snow": "qor",
+    "mist": "tuman",
+    "thunderstorm": "momaqaldiroq",
+    "fog": "tuman",
+    "haze": "xira havo",
+    "dust": "chang",
+    "sand": "qumli bo‘ron",
+    "tornado": "tornado"
 }
 
-# --- Foydalanuvchilarni saqlash ---
+# --- Simple user storage ---
 def add_user(user_id, context):
     users = context.bot_data.get("users", set())
     users.add(user_id)
     context.bot_data["users"] = users
 
-# ---- Chat tarixini boshqarish ----
-def get_chat_history(context, user_id, max_length=5):
-    history = context.user_data.get(user_id, {}).get("chat_history", [])
+# Chat history: use per-user context.user_data (PTB provides per-user dict)
+def get_chat_history(context, max_length=5):
+    history = context.user_data.get("chat_history", [])
     return history[-max_length:]
 
-def update_chat_history(context, user_id, message):
-    if user_id not in context.user_data:
-        context.user_data[user_id] = {"chat_history": []}
-    context.user_data[user_id]["chat_history"].append(message)
+def update_chat_history(context, message):
+    if "chat_history" not in context.user_data:
+        context.user_data["chat_history"] = []
+    context.user_data["chat_history"].append(message)
 
 # ---- Ovozli xabarni matnga aylantirish ----
-def speech_to_text(voice_file):
+def speech_to_text(voice_file_bytes):
     recognizer = sr.Recognizer()
     try:
-        with io.BytesIO(voice_file) as audio_stream:
-            ogg_audio = AudioSegment.from_ogg(audio_stream)
-            wav_io = io.BytesIO()
-            ogg_audio.export(wav_io, format="wav")
-            wav_io.seek(0)
-            with sr.AudioFile(wav_io) as source:
+        with io.BytesIO(voice_file_bytes) as audio_file:
+            audio = AudioSegment.from_file(audio_file, format="ogg")
+            audio.export("temp.wav", format="wav")
+            with sr.AudioFile("temp.wav") as source:
                 audio_data = recognizer.record(source)
                 text = recognizer.recognize_google(audio_data, language="uz-UZ")
                 return text
     except sr.UnknownValueError:
         return "Ovozli xabar tushunilmadi."
     except sr.RequestError as e:
-        return f"Audioni qayta ishlashda xatolik: {str(e)}"
+        return f"Audioni qayta ishlashda xatolik: {e}"
     except Exception as e:
-        logger.error(f"Ovozni matnga o'girishda kutilmagan xato: {e}")
-        return f"Ovozni matnga o'girishda xatolik."
+        return f"Xatolik: {e}"
+    finally:
+        if os.path.exists("temp.wav"):
+            try:
+                os.remove("temp.wav")
+            except:
+                pass
 
 # ---- Matnni ovozga aylantirish ----
 def text_to_speech(text, lang="uz"):
-    # gTTS o'zbek tilini qo'llab-quvvatlamaydi, shuning uchun eng yaqin til sifatida rus tilidan foydalanamiz
-    tts_lang = lang if lang != "uz" else "ru"
+    if lang == "uz":
+        lang = "ru"  # gTTS uchun O'zbek yo'q, rus tiliga o'tish
     try:
-        tts = gTTS(text=text, lang=tts_lang, slow=False)
-        audio_file = io.BytesIO()
-        tts.write_to_fp(audio_file)
-        audio_file.seek(0)
-        return audio_file
+        tts = gTTS(text=text, lang=lang, slow=False)
+        audio_buf = io.BytesIO()
+        tts.write_to_fp(audio_buf)
+        audio_buf.seek(0)
+        return audio_buf
     except Exception as e:
-        logger.error(f"Ovozga aylantirishda xatolik: {str(e)}")
+        logger.error(f"Ovozga aylantirishda xatolik: {e}")
         return None
 
-# ---- Rasmlarni analiz qilish ----
+# ---- Tilni o'zgartirish ----
+async def set_language(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [[InlineKeyboardButton(name, callback_data=f"set_lang_{code}")]
+                for name, code in LANG_CODES.items()]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text("🔤 Qaysi tilni tanlaysiz?", reply_markup=reply_markup)
+
+async def set_language_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    lang = query.data.replace("set_lang_", "")
+    context.user_data["language"] = lang
+    await query.edit_message_text(f"Til o'zgartirildi: {lang}")
+
+# ---- Rasmlarni analiz qilish (soddaroq) ----
 async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Rasm qabul qilindi. Ushbu model rasmlarni tahlil qila olmaydi, lekin siz rasm haqida savol berishingiz mumkin.")
+    photo = update.message.photo[-1]
+    file = await context.bot.get_file(photo.file_id)
+    image_data = await file.download_as_bytearray()
+    logger.info("Rasm yuklab olindi.")
+
+    # Grok ko'pincha faqat matnli ChatCompletion qabul qiladi; shu sababli biz rasm mavjudligini
+    # xabar qilamiz va foydalanuvchidan rasmni ta'riflash uchun so'rov olamiz.
+    await update.message.reply_text("Rasm olindi. Agar rasm haqida ta'rif yoki savolingiz bo'lsa, yozing — men Grok orqali javob beraman.")
+    # Chat history-ga rasm haqida xabar yozamiz
+    update_chat_history(context, {"user": "[PHOTO]", "bot": ""})
 
 # ---- Umumiy xabar handleri (matn va ovoz) ----
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -155,102 +197,90 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Antispam
     last_message_time = context.user_data.get("last_message_time", None)
-    if last_message_time and datetime.now() < last_message_time + timedelta(seconds=3):
-        await update.message.reply_text("⏳ Iltimos, biroz sekinroq yozing.")
+    if last_message_time and datetime.now() < last_message_time + timedelta(seconds=2):
+        await update.message.reply_text("⏳ Iltimos, biroz kuting!")
         return
     context.user_data["last_message_time"] = datetime.now()
 
-    text = ""
-    is_voice = False
+    # Chat tarixini olish
+    history = get_chat_history(context)
 
+    text = None
     # Matnli xabar
     if update.message.text:
         text = update.message.text
-        logger.info(f"Foydalanuvchi {user_id} dan matnli xabar: {text}")
+        logger.info(f"Matnli xabar: {text}")
+        update_chat_history(context, {"user": text, "bot": ""})
 
     # Ovozli xabar
     elif update.message.voice:
-        is_voice = True
         voice = update.message.voice
         file = await context.bot.get_file(voice.file_id)
         voice_data = await file.download_as_bytearray()
-        logger.info(f"Foydalanuvchi {user_id} dan ovozli xabar qabul qilindi.")
+        logger.info("Ovozli xabar yuklab olindi.")
         text = speech_to_text(voice_data)
-        await update.message.reply_text(f"🗣️ Sizning so'rovingiz: \"{text}\"")
-    
+        await update.message.reply_text(f"Sizning ovozli xabaringiz: {text}")
+        update_chat_history(context, {"user": text, "bot": ""})
+
+    # Rasmlar
+    elif update.message.photo:
+        await handle_photo_message(update, context)
+        return
+
     else:
+        await update.message.reply_text("Noma'lum xabar. Matn, ovoz yoki rasm yuboring.")
         return
 
-    # Kiritilgan matn bo'sh emasligini tekshirish
-    if not text or not text.strip():
-        await update.message.reply_text("Iltimos, biror ma'lumot kiriting.")
-        return
+    # AI javobini olish (Grok)
+    prompt = f"Foydalanuvchi: {text}\nQisqacha, foydali javob bering:" 
+    # Grok so'rovini tarmoqqa bloklamaslik uchun asyncio.to_thread bilan chaqiramiz
+    response_text = await asyncio.to_thread(grok_generate_content, prompt)
+    if not response_text:
+        response_text = "Grok javobi bo'sh yoki xato yuz berdi."
 
-    # Tarjima rejimini tekshirish
-    if context.user_data.get("awaiting_translation"):
-        await translate_message(update, context, text)
-        return
-
-    # Prezentatsiya rejimini tekshirish
-    if context.user_data.get("awaiting_presentation_topic"):
-        await handle_presentation_topic(update, context, text)
-        return
-    
-    await update.message.chat.send_action(action='typing')
-
-    # AI javobini olish
-    history = get_chat_history(context, user_id)
-    prompt = "\n".join([f"User: {h['user']}\nBot: {h['bot']}" for h in history])
-    prompt += f"\nUser: {text}\nBot:"
-    
-    response_text = await grok_generate_content(prompt)
-    
-    update_chat_history(context, user_id, {"user": text, "bot": response_text})
+    update_chat_history(context, {"user": text, "bot": response_text})
 
     # Javob turi
-    if is_voice:
-        audio_file = text_to_speech(response_text, lang="uz")
+    if update.message.voice:
+        audio_file = text_to_speech(response_text, lang=context.user_data.get("language", "uz"))
         if audio_file:
             await update.message.reply_voice(audio_file)
+        else:
+            await update.message.reply_text(response_text)
     else:
         await update.message.reply_text(response_text)
 
 # ---- Start va Help ----
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    add_user(user_id, context)
-    context.user_data.clear() # Bot qayta ishga tushganda eski holatlarni tozalash
-    await update.message.reply_text("Salom! Men Grok asosida ishlovchi yordamchi botman 🤖.\nSavollaringizni bering yoki yordam uchun /help buyrug'ini bosing.")
+    add_user(update.effective_user.id, context)
+    await update.message.reply_text("Salom! Men Vizabotman 🤖. Visa yordami uchun savollaringizni bering yoki /help ni ishlat.")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
-        "Mavjud buyruqlar:\n"
         "/start - Botni ishga tushirish\n"
-        "/help - Yordam menyusini ko'rsatish\n"
-        "/weather - O'zbekiston shaharlaridagi ob-havo\n"
-        "/crypto - Kriptovalyutalar narxlari\n"
-        "/translate - Matnni boshqa tilga tarjima qilish\n"
-        "/currency - Markaziy Bank valyuta kurslari\n"
-        "/presentation - Mavzu bo'yicha prezentatsiya yaratish\n\n"
-        "🤖 Shunchaki matn yoki ovozli xabar yuborib men bilan suhbatlashishingiz mumkin!"
+        "/help - Yordam\n"
+        "/weather - Shaharni tanlab, ob-havo olish\n"
+        "/crypto - Kripto tanlab, narxini olish\n"
+        "/translate - Tilni tanlab, tarjima qilish\n"
+        "/currency - Bugungi valyuta kurslari (CBU)\n"
+        "🤖 Visa yordami uchun matn, ovoz yoki rasm yuboring – ketma-ket suhbatda javob beraman!\n"
     )
     if update.effective_user.id == ADMIN_ID:
         text += (
-            "\n--- 🛠 Admin buyruqlari ---\n"
-            "/broadcast <xabar> - Barcha foydalanuvchilarga xabar yuborish\n"
-            "/report - Kunlik hisobotni olish\n"
-            "/myid - O'z Telegram ID raqamingizni bilish"
+            "\n--- 🛠 Admin komandalar ---\n"
+            "/broadcast - Hammaga xabar yuborish\n"
+            "/report - So‘rovlar haqida hisobot\n"
+            "/myid - O‘z ID’ingizni bilish\n"
         )
     await update.message.reply_text(text)
 
 # ---- My ID ----
 async def myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(f"Sizning ID: `{update.effective_user.id}`", parse_mode='MarkdownV2')
+    await update.message.reply_text(f"Sizning ID: {update.effective_user.id}")
 
 # ---- WEATHER ----
 async def weather_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = []
-    row = []
+    keyboard, row = [], []
     for i, city in enumerate(UZ_CITIES, start=1):
         row.append(InlineKeyboardButton(city, callback_data=f"weather_{city}"))
         if i % 3 == 0:
@@ -269,21 +299,21 @@ async def weather_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         res = requests.get(url).json()
         if res.get("cod") != 200:
-            await query.edit_message_text(f"❌ Kechirasiz, {city} uchun ob-havo ma'lumoti topilmadi.")
+            await query.edit_message_text(f"❌ Ob-havo topilmadi: {city}")
             return
         temp = res["main"]["temp"]
         desc = res["weather"][0]["description"].lower()
         uz_desc = WEATHER_CONDITIONS.get(desc, desc)
-        await query.edit_message_text(f"📍 {city}\n\n🌡️ Harorat: {temp}°C\n🌤 Holat: {uz_desc.capitalize()}")
+        await query.edit_message_text(f"🌤 {city} ob-havosi:\n{temp}°C, {uz_desc}")
     except Exception as e:
-        logger.error(f"Ob-havo olishda xatolik: {e}")
-        await query.edit_message_text(f"Ob-havo ma'lumotlarini olishda xatolik yuz berdi.")
+        await query.edit_message_text(f"Xatolik: {e}")
 
 # ---- CRYPTO ----
 async def crypto_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [[InlineKeyboardButton(coin.capitalize(), callback_data=f"crypto_{coin}")] for coin in CRYPTO_COINS]
+    keyboard = [[InlineKeyboardButton(coin.capitalize(), callback_data=f"crypto_{coin}")]
+                for coin in CRYPTO_COINS]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("💰 Qaysi kriptovalyuta narxini bilmoqchisiz?", reply_markup=reply_markup)
+    await update.message.reply_text("💰 Qaysi kripto narxini bilmoqchisiz?", reply_markup=reply_markup)
 
 async def crypto_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -293,57 +323,46 @@ async def crypto_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         res = requests.get(url).json()
         if coin not in res:
-            await query.edit_message_text(f"❌ Kechirasiz, {coin} uchun narx topilmadi.")
+            await query.edit_message_text(f"❌ Kripto topilmadi: {coin}")
             return
         price = res[coin]["usd"]
-        await query.edit_message_text(f"💰 {coin.capitalize()} narxi: ${price:,.2f}")
+        await query.edit_message_text(f"💰 {coin.capitalize()} narxi: ${price}")
     except Exception as e:
-        logger.error(f"Kripto narxini olishda xatolik: {e}")
-        await query.edit_message_text("Kriptovalyuta narxini olishda xatolik yuz berdi.")
+        await query.edit_message_text(f"Xatolik: {e}")
 
 # ---- TRANSLATE ----
 async def translate_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [[InlineKeyboardButton(name, callback_data=f"lang_{code}")] for name, code in LANG_CODES.items()]
+    keyboard = [[InlineKeyboardButton(name, callback_data=f"lang_{code}")]
+                for name, code in LANG_CODES.items()]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text("🔤 Qaysi tilga tarjima qilmoqchisiz?", reply_markup=reply_markup)
 
 async def lang_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    lang_code = query.data.replace("lang_", "")
-    context.user_data["target_lang"] = lang_code
-    context.user_data["awaiting_translation"] = True
-    lang_name = next((name for name, code in LANG_CODES.items() if code == lang_code), lang_code)
-    await query.edit_message_text(f"✍️ Endi matn yuboring, men uni {lang_name} tiliga tarjima qilaman.")
+    lang = query.data.replace("lang_", "")
+    context.user_data["target_lang"] = lang
+    await query.edit_message_text(f"✍️ Endi matn yuboring, men uni `{lang}` tiliga tarjima qilaman.")
 
-async def translate_message(update: Update, context: ContextTypes.DEFAULT_TYPE, text_to_translate):
-    target_lang = context.user_data.get("target_lang")
-    if not target_lang:
-        await update.message.reply_text("Tarjima uchun til tanlanmagan. /translate buyrug'ini qayta bosing.")
-        return
-
-    lang_name = next((name for name, code in LANG_CODES.items() if code == target_lang), target_lang)
-    await update.message.reply_text(f"Tarjima qilinmoqda...")
-    await update.message.chat.send_action(action='typing')
-
-    try:
-        # Grok orqali tarjima qilish
-        prompt = f"Translate the following text to {lang_name} language. Return only the translated text, without any extra explanations or introductions. The text to translate is: \"{text_to_translate}\""
-        translated_text = await grok_generate_content(prompt, max_tokens=len(text_to_translate) * 2)
-        await update.message.reply_text(f"🔤 Tarjima ({lang_name}):\n\n{translated_text}")
-    except Exception as e:
-        logger.error(f"Grok tarjima xatoligi: {str(e)}")
-        # Fallback: deep-translator
+async def translate_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if "target_lang" in context.user_data:
+        lang = context.user_data["target_lang"]
+        text = update.message.text
         try:
-            translated_fallback = GoogleTranslator(source="auto", target=target_lang).translate(text_to_translate)
-            await update.message.reply_text(f"🔤 Tarjima (fallback):\n\n{translated_fallback}")
-        except Exception as e2:
-            await update.message.reply_text(f"❌ Tarjima qilishda xatolik yuz berdi: {str(e2)}")
-    finally:
-        # Tarjima holatini tozalash
-        if "target_lang" in context.user_data: del context.user_data["target_lang"]
-        if "awaiting_translation" in context.user_data: del context.user_data["awaiting_translation"]
-
+            prompt = f"Translate the following text into {lang}: {text}"
+            # Grok dan tarjima so'raymiz
+            translated = await asyncio.to_thread(grok_generate_content, prompt)
+            if translated and not translated.startswith("Xatolik"):
+                await update.message.reply_text(f"🔤 Tarjima ({lang}): {translated}")
+            else:
+                # Fallback to GoogleTranslator
+                translated2 = GoogleTranslator(source="auto", target=lang).translate(text)
+                await update.message.reply_text(f"🔤 Tarjima ({lang}): {translated2}")
+            del context.user_data["target_lang"]
+        except Exception as e:
+            await update.message.reply_text(f"❌ Tarjima xatoligi: {e}")
+            if "target_lang" in context.user_data:
+                del context.user_data["target_lang"]
 
 # ---- CURRENCY ----
 async def currency(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -354,162 +373,121 @@ async def currency(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Valyuta kurslari topilmadi.")
             return
         selected = [c for c in res if c["Ccy"] in ["USD", "EUR", "RUB"]]
-        text = f"💱 {datetime.now().strftime('%d.%m.%Y')} uchun valyuta kurslari (O'zbekiston MB):\n\n"
+        text = "💱 Bugungi valyuta kurslari (CBU):\n\n"
         for c in selected:
-            text += f"🇺🇸 1 {c['Ccy']} = {c['Rate']} so'm\n" if c['Ccy'] == 'USD' else \
-                    f"🇪🇺 1 {c['Ccy']} = {c['Rate']} so'm\n" if c['Ccy'] == 'EUR' else \
-                    f"🇷🇺 1 {c['Ccy']} = {c['Rate']} so'm\n"
+            text += f"1 {c['Ccy']} = {c['Rate']} so‘m\n"
         await update.message.reply_text(text)
     except Exception as e:
-        logger.error(f"Valyuta kursini olishda xatolik: {e}")
-        await update.message.reply_text("Valyuta kurslarini olishda xatolik yuz berdi.")
+        await update.message.reply_text(f"Xatolik: {e}")
 
 # ---- ADMIN funksiyalari ----
 async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("❌ Bu buyruq faqat admin uchun.")
+        await update.message.reply_text("❌ Siz admin emassiz.")
         return
     if not context.args:
-        await update.message.reply_text("Foydalanish: /broadcast <Xabar matni>")
+        await update.message.reply_text("Foydalanish: /broadcast Xabar matni")
         return
     text = " ".join(context.args)
     users = context.bot_data.get("users", set())
     if not users:
-        await update.message.reply_text("📭 Hali foydalanuvchilar yo'q.")
+        await update.message.reply_text("📭 Hali foydalanuvchi yo‘q.")
         return
-    sent, failed = 0, 0
+    sent = failed = 0
     for uid in users:
         try:
-            await context.bot.send_message(uid, f"📢 Admindan xabar:\n\n{text}")
+            await context.bot.send_message(uid, f"📢 Admin xabari:\n\n{text}")
             sent += 1
         except Exception:
             failed += 1
-    await update.message.reply_text(f"✅ Yuborildi: {sent} ta\n❌ Xatolik: {failed} ta")
+    await update.message.reply_text(f"✅ Yuborildi: {sent} ta\n❌ Xato: {failed} ta")
 
-async def report(context: ContextTypes.DEFAULT_TYPE):
-    users_count = len(context.bot_data.get("users", set()))
-    report_text = f"📊 Kunlik hisobot\n\n👥 Jami foydalanuvchilar soni: {users_count}"
-    await context.bot.send_message(ADMIN_ID, report_text)
-
-async def report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("❌ Bu buyruq faqat admin uchun.")
+        await update.message.reply_text("❌ Siz admin emassiz.")
         return
-    await report(context)
+    await send_report(context)
+
+async def send_report(context: ContextTypes.DEFAULT_TYPE):
+    logs = context.bot_data.get("logs", [])
+    users = context.bot_data.get("users", set())
+    if not logs:
+        await context.bot.send_message(ADMIN_ID, "📊 Bugun hech qanday so‘rov bo‘lmadi.")
+        return
+    msg = (
+        f"📊 Kunlik hisobot\n\n"
+        f"👥 Foydalanuvchilar soni: {len(users)}\n"
+        f"💬 So‘rovlar soni: {len(logs)}\n\n"
+        "📝 Oxirgi 5 ta so‘rov:\n"
+    )
+    for time, uid, text in logs[-5:]:
+        msg += f"🕒 {time} | 👤 {uid}\n💬 {text}\n\n"
+    await context.bot.send_message(ADMIN_ID, msg)
 
 # ---- Prezentatsiya tayyorlash ----
 async def presentation_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🎥 Prezentatsiya uchun mavzuni kiriting (masalan, 'Koinot sirlari' yoki 'Sun'iy intellekt kelajagi').")
+    await update.message.reply_text("🎥 Prezentatsiya mavzusini kiriting (masalan, 'O‘zbekiston tarixi' yoki 'AI texnologiyalari').")
     context.user_data["awaiting_presentation_topic"] = True
 
-async def handle_presentation_topic(update: Update, context: ContextTypes.DEFAULT_TYPE, topic):
-    await update.message.reply_text(f"📝 \"{topic}\" mavzusida prezentatsiya tayyorlanmoqda... Bu bir necha daqiqa vaqt olishi mumkin, iltimos, kuting.")
-    await update.message.chat.send_action(action='upload_document')
+async def handle_presentation_topic(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if context.user_data.get("awaiting_presentation_topic"):
+        topic = update.message.text
+        await update.message.reply_text(f"📝 '{topic}' bo'yicha prezentatsiya tayyorlanmoqda...")
+        prompt = (
+            f"Siz AI yordamchisiz. Quyidagi mavzu bo'yicha qisqa prezentatsiya matni yarating: {topic}. Strukturani quyidagi tarzda saqlang:\n"
+            "- Sarlavha\n- Kirish (2-3 jumlali)\n- Asosiy qism (3 ta asosiy nuqta bilan)\n- Xulosa (1-2 jumlali)\nNatijani faqat matn sifatida qaytaring, hech qanday qo'shimcha izohsiz."
+        )
+        try:
+            response_text = await asyncio.to_thread(grok_generate_content, prompt)
+            if not response_text:
+                raise Exception("Grok javobi bo'sh")
 
-    prompt = f"""Create a concise presentation outline for the topic: "{topic}".
-Provide the content in a simple, structured format.
-Follow this structure exactly:
-SLIDE 1: Title
-[Title of the presentation]
-SLIDE 2: Introduction
-[A brief 2-3 sentence introduction to the topic.]
-SLIDE 3: Key Point 1
-[Title for the first main point]
-[A few bullet points or a short paragraph explaining the first point.]
-SLIDE 4: Key Point 2
-[Title for the second main point]
-[A few bullet points or a short paragraph explaining the second point.]
-SLIDE 5: Key Point 3
-[Title for the third main point]
-[A few bullet points or a short paragraph explaining the third point.]
-SLIDE 6: Conclusion
-[A brief 1-2 sentence conclusion summarizing the presentation.]
-SLIDE 7: Q&A
-[A slide for questions, simply titled 'Questions & Answers']
+            lines = [ln for ln in response_text.split('\n') if ln.strip()]
 
-Do not add any extra comments or text outside of this structure."""
-    
-    try:
-        response_text = await grok_generate_content(prompt, max_tokens=2048)
-        
-        # Prezentatsiya fayllarini yaratish
-        ppt_io = create_ppt(response_text, topic)
-        pdf_io = create_pdf(response_text)
+            ppt = Presentation()
+            title_slide_layout = ppt.slide_layouts[0]
+            slide = ppt.slides.add_slide(title_slide_layout)
+            title = slide.shapes.title
+            subtitle = slide.placeholders[1]
+            title.text = lines[0] if lines else topic
+            subtitle.text = "Tayyorlandi: " + datetime.now().strftime("%Y-%m-%d %H:%M")
 
-        await update.message.reply_document(document=ppt_io, filename=f"{topic}_presentation.pptx")
-        await update.message.reply_document(document=pdf_io, filename=f"{topic}_presentation.pdf")
-        await update.message.reply_text("🎉 Prezentatsiya PowerPoint (.pptx) va PDF formatida tayyor!")
-    except Exception as e:
-        logger.error(f"Prezentatsiya yaratishda xatolik: {str(e)}")
-        await update.message.reply_text(f"❌ Kechirasiz, prezentatsiya yaratishda xatolik yuz berdi.")
-    finally:
-        del context.user_data["awaiting_presentation_topic"]
+            body_slide_layout = ppt.slide_layouts[1]
+            for line in lines[1:]:
+                slide = ppt.slides.add_slide(body_slide_layout)
+                title = slide.shapes.title
+                body = slide.placeholders[1]
+                title.text = line[:40]
+                body.text = line
 
-def create_ppt(text_content, topic):
-    prs = Presentation()
-    # Title Slide
-    title_slide_layout = prs.slide_layouts[0]
-    slide = prs.slides.add_slide(title_slide_layout)
-    title = slide.shapes.title
-    subtitle = slide.placeholders.get(1)
-    title.text = topic
-    if subtitle:
-        subtitle.text = f"Tayyorlandi: {datetime.now().strftime('%Y-%m-%d')}"
+            ppt_io = io.BytesIO()
+            ppt.save(ppt_io)
+            ppt_io.seek(0)
 
-    # Content Slides
-    content_slide_layout = prs.slide_layouts[1]
-    slides_data = text_content.split('SLIDE ')[1:]
-    
-    for slide_text in slides_data:
-        if not slide_text.strip():
-            continue
-        
-        lines = slide_text.strip().split('\n')
-        slide_title = lines[0].split(':', 1)[1].strip()
-        slide_content = "\n".join(lines[1:]).strip()
+            pdf_io = io.BytesIO()
+            doc = SimpleDocTemplate(pdf_io, pagesize=letter)
+            styles = getSampleStyleSheet()
+            story = []
+            for line in lines:
+                story.append(Paragraph(line, styles['Heading1']))
+                story.append(Spacer(1, 12))
+            doc.build(story)
+            pdf_io.seek(0)
 
-        slide = prs.slides.add_slide(content_slide_layout)
-        title_shape = slide.shapes.title
-        body_shape = slide.placeholders[1]
-        
-        title_shape.text = slide_title
-        body_shape.text = slide_content
-
-    ppt_io = io.BytesIO()
-    prs.save(ppt_io)
-    ppt_io.seek(0)
-    return ppt_io
-
-def create_pdf(text_content):
-    pdf_io = io.BytesIO()
-    doc = SimpleDocTemplate(pdf_io, pagesize=letter)
-    styles = getSampleStyleSheet()
-    story = []
-    
-    slides_data = text_content.split('SLIDE ')[1:]
-    for slide_text in slides_data:
-        if not slide_text.strip():
-            continue
-            
-        lines = slide_text.strip().split('\n')
-        slide_title = lines[0].split(':', 1)[1].strip()
-        slide_content = "\n".join(lines[1:]).strip().replace('\n', '<br/>')
-
-        story.append(Paragraph(slide_title, styles['h1']))
-        story.append(Spacer(1, 12))
-        story.append(Paragraph(slide_content, styles['BodyText']))
-        story.append(Spacer(1, 24))
-
-    doc.build(story)
-    pdf_io.seek(0)
-    return pdf_io
-
+            await update.message.reply_document(document=ppt_io, filename=f"{topic}_presentation.pptx")
+            await update.message.reply_document(document=pdf_io, filename=f"{topic}_presentation.pdf")
+            await update.message.reply_text("🎉 Prezentatsiya PowerPoint (.pptx) va PDF formatida yuborildi!")
+        except Exception as e:
+            logger.error(f"Prezentatsiya yaratishda xatolik: {e}")
+            await update.message.reply_text(f"❌ Prezentatsiya yaratishda xatolik: {e}")
+        finally:
+            context.user_data.pop("awaiting_presentation_topic", None)
 
 # ---- MAIN ----
 def main():
     application = Application.builder().token(TELEGRAM_TOKEN).build()
 
-    # Buyruqlar
+    # Commands
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("weather", weather_start))
@@ -517,29 +495,41 @@ def main():
     application.add_handler(CommandHandler("translate", translate_start))
     application.add_handler(CommandHandler("currency", currency))
     application.add_handler(CommandHandler("broadcast", broadcast))
-    application.add_handler(CommandHandler("report", report_command))
+    application.add_handler(CommandHandler("report", report))
     application.add_handler(CommandHandler("myid", myid))
     application.add_handler(CommandHandler("presentation", presentation_start))
 
-    # Tugma handlerlar
+    # Callback handlers
     application.add_handler(CallbackQueryHandler(weather_button, pattern="^weather_"))
     application.add_handler(CallbackQueryHandler(crypto_button, pattern="^crypto_"))
     application.add_handler(CallbackQueryHandler(lang_button, pattern="^lang_"))
+    application.add_handler(CallbackQueryHandler(set_language_button, pattern="^set_lang_"))
 
-    # Umumiy xabar handleri
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    application.add_handler(MessageHandler(filters.VOICE, handle_message))
-    application.add_handler(MessageHandler(filters.PHOTO, handle_photo_message))
+    # Message handlers
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND | filters.VOICE | filters.PHOTO, handle_message))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, translate_message))
 
-    # Scheduler
-    scheduler = AsyncIOScheduler(timezone="Asia/Tashkent")
-    # Kunlik hisobotni yuborish (har kuni 23:59 da)
-    scheduler.add_job(report, "cron", hour=23, minute=59, args=[context])
+    scheduler = AsyncIOScheduler()
+    # schedule daily report (uses application as context) -- adapt if needed
+    scheduler.add_job(lambda: asyncio.create_task(send_report(application)), 'cron', hour=23, minute=59)
     scheduler.start()
-    
-    logger.info("Bot ishga tushmoqda...")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
 
+    port = int(os.environ.get("PORT", 8443))
+    url_path = TELEGRAM_TOKEN
+    webhook_url = f"https://{RENDER_EXTERNAL_HOSTNAME}/{url_path}" if RENDER_EXTERNAL_HOSTNAME else None
+
+    if not webhook_url:
+        logger.info("Polling rejimida ishlayapman.")
+        application.run_polling(allowed_updates=Update.ALL_TYPES)
+    else:
+        logger.info(f"Bot webhook bilan ishga tushmoqda: {webhook_url}")
+        application.run_webhook(
+            listen="0.0.0.0",
+            port=port,
+            url_path=url_path,
+            webhook_url=webhook_url,
+            allowed_updates=Update.ALL_TYPES
+        )
 
 if __name__ == "__main__":
     main()
