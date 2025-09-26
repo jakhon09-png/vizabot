@@ -510,8 +510,6 @@ def main():
     # Scheduler ni moslashtirish
     scheduler = AsyncIOScheduler()
     scheduler.add_job(send_report, "cron", hour=23, minute=59, args=[application])
-    loop = asyncio.get_event_loop()
-    loop.create_task(scheduler.start())
 
     # Webhook yoki polling
     port = int(os.environ.get("PORT", 8443))
@@ -530,6 +528,14 @@ def main():
             webhook_url=webhook_url,
             allowed_updates=Update.ALL_TYPES
         )
+
+    # Scheduler ni botning loop'ida boshlash
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            loop.create_task(scheduler.start())
+    except RuntimeError:
+        logger.warning("Event loop allaqachon yopilgan yoki ishlamayapti.")
 
 if __name__ == "__main__":
     main()
