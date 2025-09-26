@@ -47,7 +47,7 @@ OPENAI_API_BASE_URL = "https://api.openai.com/v1/chat/completions"
 OPENAI_MODEL = "gpt-3.5-turbo"
 
 # OpenAI orqali matn generatsiya qilish funksiyasi
-async def openai_generate_content(prompt, max_tokens=500, temperature=0.7):
+async def openai_generate_content(prompt, max_tokens=500, temperature=0.7, retries=3, delay=5):
     headers = {
         "Authorization": f"Bearer {OPENAI_API_KEY}",
         "Content-Type": "application/json",
@@ -59,17 +59,24 @@ async def openai_generate_content(prompt, max_tokens=500, temperature=0.7):
         "max_tokens": max_tokens,
         "temperature": temperature
     }
-    try:
-        logger.info(f"OpenAI API so‘rovi: {prompt[:50]}...")
-        response = requests.post(OPENAI_API_BASE_URL, headers=headers, json=data, timeout=15)
-        response.raise_for_status()
-        logger.info("OpenAI API javobi muvaffaqiyatli olingan.")
-        return response.json()["choices"][0]["message"]["content"]
-    except requests.exceptions.RequestException as e:
-        logger.error(f"OpenAI API xatoligi: {str(e)}, Status Code: {getattr(e.response, 'status_code', 'N/A')}")
-        if getattr(e.response, 'status_code', None) == 403:
-            return "Xatolik: API ruxsat etilmagan. Iltimos, kalitingizni tekshiring."
-        return f"Xatolik: {str(e)}"
+    for attempt in range(retries):
+        try:
+            logger.info(f"OpenAI API so‘rovi ({attempt + 1}/{retries}): {prompt[:50]}...")
+            response = requests.post(OPENAI_API_BASE_URL, headers=headers, json=data, timeout=15)
+            response.raise_for_status()
+            logger.info("OpenAI API javobi muvaffaqiyatli olingan.")
+            return response.json()["choices"][0]["message"]["content"]
+        except requests.exceptions.RequestException as e:
+            logger.error(f"OpenAI API xatoligi: {str(e)}, Status Code: {getattr(e.response, 'status_code', 'N/A')}")
+            if getattr(e.response, 'status_code', None) == 429 and attempt < retries - 1:
+                logger.info(f"429 xatoligi aniqlandi. {delay} soniya kutish va qayta urinish...")
+                await asyncio.sleep(delay)
+                delay *= 2  # Eksponensial orqa qadam
+            else:
+                if getattr(e.response, 'status_code', None) == 429:
+                    return "Xatolik: Juda ko‘p so‘rov. Iltimos, biroz kuting yoki obunani ko‘rib chiqing."
+                return f"Xatolik: {str(e)}"
+    return "Xatolik: Maksimal qayta urinishlar soniga yetildi."
 
 # 🌤 O‘zbekiston shaharlar ro‘yxati
 UZ_CITIES = [
@@ -216,8 +223,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     add_user(user_id, context)
 
     last_message_time = context.user_data.get("last_message_time", None)
-    if last_message_time and datetime.now() < last_message_time + timedelta(seconds=5):
-        await update.message.reply_text("⏳ Iltimos, biroz kuting!")
+    if last_message_time and datetime.now() < last_message_time + timedelta(seconds=10):  # 5 soniyadan 10 soniyaga oshirildi
+        await update.message.reply_text("⏳ Iltimos, 10 soniya kuting!")
         return
     context.user_data["last_message_time"] = datetime.now()
 
