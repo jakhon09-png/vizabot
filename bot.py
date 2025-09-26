@@ -50,7 +50,8 @@ GROK_MODEL = "grok-1"
 async def grok_generate_content(prompt, max_tokens=500, temperature=0.7):
     headers = {
         "Authorization": f"Bearer {GROK_API_KEY}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        "User-Agent": "TelegramBot/1.0"  # Qo‘shimcha identifikatsiya
     }
     data = {
         "model": GROK_MODEL,
@@ -59,11 +60,15 @@ async def grok_generate_content(prompt, max_tokens=500, temperature=0.7):
         "temperature": temperature
     }
     try:
-        response = requests.post(GROK_API_BASE_URL, headers=headers, json=data, timeout=10)
+        logger.info(f"Grok API so‘rovi: {prompt[:50]}...")  # So‘rovni logga yozish
+        response = requests.post(GROK_API_BASE_URL, headers=headers, json=data, timeout=15)
         response.raise_for_status()
+        logger.info("Grok API javobi muvaffaqiyatli olingan.")
         return response.json()["choices"][0]["message"]["content"]
     except requests.exceptions.RequestException as e:
-        logger.error(f"Grok API xatoligi: {str(e)}")
+        logger.error(f"Grok API xatoligi: {str(e)}, Status Code: {getattr(e.response, 'status_code', 'N/A')}")
+        if getattr(e.response, 'status_code', None) == 403:
+            return "Xatolik: API ruxsat etilmagan. Iltimos, kalitingizni tekshiring yoki kvotani ko‘rib chiqing."
         return f"Xatolik: {str(e)}"
 
 # 🌤 O‘zbekiston shaharlar ro‘yxati
@@ -186,7 +191,8 @@ async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYP
         base64_image = image_data.hex()  # Hex formatida aylantirish
         headers = {
             "Authorization": f"Bearer {GROK_API_KEY}",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
+            "User-Agent": "TelegramBot/1.0"
         }
         prompt = "Bu rasmni tahlil qiling va tavsiflang."
         data = {
@@ -197,7 +203,7 @@ async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYP
             ]}],
             "max_tokens": 500
         }
-        response = requests.post(GROK_API_BASE_URL, headers=headers, json=data, timeout=10)
+        response = requests.post(GROK_API_BASE_URL, headers=headers, json=data, timeout=15)
         response.raise_for_status()
         await update.message.reply_text(response.json()["choices"][0]["message"]["content"])
     except Exception as e:
