@@ -33,42 +33,42 @@ logger = logging.getLogger(__name__)
 # .env yuklash
 load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-GROK_API_KEY = os.getenv("GROK_API_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 WEATHER_API_KEY = os.getenv("WEATHER_API_KEY")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 RENDER_EXTERNAL_HOSTNAME = os.getenv("RENDER_EXTERNAL_HOSTNAME")
 
-if not TELEGRAM_TOKEN or not GROK_API_KEY or not WEATHER_API_KEY:
-    logger.error("TELEGRAM_TOKEN, GROK_API_KEY yoki WEATHER_API_KEY topilmadi!")
+if not TELEGRAM_TOKEN or not OPENAI_API_KEY or not WEATHER_API_KEY:
+    logger.error("TELEGRAM_TOKEN, OPENAI_API_KEY yoki WEATHER_API_KEY topilmadi!")
     exit(1)
 
-# Grok API sozlamalari
-GROK_API_BASE_URL = "https://api.x.ai/v1/chat/completions"
-GROK_MODEL = "grok-1"
+# OpenAI API sozlamalari
+OPENAI_API_BASE_URL = "https://api.openai.com/v1/chat/completions"
+OPENAI_MODEL = "gpt-3.5-turbo"
 
-# Grok orqali matn generatsiya qilish funksiyasi
-async def grok_generate_content(prompt, max_tokens=500, temperature=0.7):
+# OpenAI orqali matn generatsiya qilish funksiyasi
+async def openai_generate_content(prompt, max_tokens=500, temperature=0.7):
     headers = {
-        "Authorization": f"Bearer {GROK_API_KEY}",
+        "Authorization": f"Bearer {OPENAI_API_KEY}",
         "Content-Type": "application/json",
-        "User-Agent": "TelegramBot/1.0"  # Qo‘shimcha identifikatsiya
+        "User-Agent": "TelegramBot/1.0"
     }
     data = {
-        "model": GROK_MODEL,
+        "model": OPENAI_MODEL,
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": max_tokens,
         "temperature": temperature
     }
     try:
-        logger.info(f"Grok API so‘rovi: {prompt[:50]}...")  # So‘rovni logga yozish
-        response = requests.post(GROK_API_BASE_URL, headers=headers, json=data, timeout=15)
+        logger.info(f"OpenAI API so‘rovi: {prompt[:50]}...")
+        response = requests.post(OPENAI_API_BASE_URL, headers=headers, json=data, timeout=15)
         response.raise_for_status()
-        logger.info("Grok API javobi muvaffaqiyatli olingan.")
+        logger.info("OpenAI API javobi muvaffaqiyatli olingan.")
         return response.json()["choices"][0]["message"]["content"]
     except requests.exceptions.RequestException as e:
-        logger.error(f"Grok API xatoligi: {str(e)}, Status Code: {getattr(e.response, 'status_code', 'N/A')}")
+        logger.error(f"OpenAI API xatoligi: {str(e)}, Status Code: {getattr(e.response, 'status_code', 'N/A')}")
         if getattr(e.response, 'status_code', None) == 403:
-            return "Xatolik: API ruxsat etilmagan. Iltimos, kalitingizni tekshiring yoki kvotani ko‘rib chiqing."
+            return "Xatolik: API ruxsat etilmagan. Iltimos, kalitingizni tekshiring."
         return f"Xatolik: {str(e)}"
 
 # 🌤 O‘zbekiston shaharlar ro‘yxati
@@ -190,20 +190,20 @@ async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYP
     try:
         base64_image = image_data.hex()  # Hex formatida aylantirish
         headers = {
-            "Authorization": f"Bearer {GROK_API_KEY}",
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
             "Content-Type": "application/json",
             "User-Agent": "TelegramBot/1.0"
         }
         prompt = "Bu rasmni tahlil qiling va tavsiflang."
         data = {
-            "model": "grok-1-vision",
+            "model": "gpt-4o",  # OpenAI'da rasm tahlili uchun mos model
             "messages": [{"role": "user", "content": [
                 {"type": "text", "text": prompt},
                 {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
             ]}],
             "max_tokens": 500
         }
-        response = requests.post(GROK_API_BASE_URL, headers=headers, json=data, timeout=15)
+        response = requests.post(OPENAI_API_BASE_URL, headers=headers, json=data, timeout=15)
         response.raise_for_status()
         await update.message.reply_text(response.json()["choices"][0]["message"]["content"])
     except Exception as e:
@@ -249,11 +249,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         prompt += "\n".join([f"Foydalanuvchi: {msg['user']}\nBot: {msg['bot']}" for msg in history])
         prompt += f"\nFoydalanuvchi: {text}\nBot: "
         try:
-            response_text = await grok_generate_content(prompt)
+            response_text = await openai_generate_content(prompt)
             update_chat_history(context, user_id, {"user": text, "bot": response_text})
             await update.message.reply_text(f"Javob: {response_text}")
         except Exception as e:
-            logger.error(f"Grok javobida xatolik: {str(e)}")
+            logger.error(f"OpenAI javobida xatolik: {str(e)}")
             await update.message.reply_text(f"Xatolik: {str(e)}")
 
 # ---- Start va Help ----
@@ -350,7 +350,7 @@ async def translate_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = update.message.text
         try:
             prompt = f"Translate the following text into {lang}: {text}"
-            response_text = await grok_generate_content(prompt)
+            response_text = await openai_generate_content(prompt)
             await update.message.reply_text(f"🔤 Tarjima ({lang}): {response_text}")
             del context.user_data["target_lang"]
         except Exception as e:
@@ -434,7 +434,7 @@ async def handle_presentation_topic(update: Update, context: ContextTypes.DEFAUL
         
         prompt = f"Siz AI yordamchisiz. Quyidagi mavzu bo'yicha qisqa prezentatsiya matni yarating: {topic}. Strukturani quyidagi tarzda saqlang:\n- Sarlavha\n- Kirish (2-3 jumlali)\n- Asosiy qism (3 ta asosiy nuqta bilan)\n- Xulosa (1-2 jumlali)\nNatijani faqat matn sifatida qaytaring, hech qanday qo'shimcha izohsiz."
         try:
-            response_text = await grok_generate_content(prompt, max_tokens=1000)
+            response_text = await openai_generate_content(prompt, max_tokens=1000)
             presentation_text = response_text.split('\n')
             logger.info(f"Generatsiya qilingan matn: {presentation_text}")
 
