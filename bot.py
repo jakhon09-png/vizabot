@@ -10,6 +10,7 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
+import google.generativeai as genai
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
 from deep_translator import GoogleTranslator
@@ -33,50 +34,18 @@ logger = logging.getLogger(__name__)
 # .env yuklash
 load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 WEATHER_API_KEY = os.getenv("WEATHER_API_KEY")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 RENDER_EXTERNAL_HOSTNAME = os.getenv("RENDER_EXTERNAL_HOSTNAME")
 
-if not TELEGRAM_TOKEN or not OPENAI_API_KEY or not WEATHER_API_KEY:
-    logger.error("TELEGRAM_TOKEN, OPENAI_API_KEY yoki WEATHER_API_KEY topilmadi!")
+if not TELEGRAM_TOKEN or not GEMINI_API_KEY or not WEATHER_API_KEY:
+    logger.error("TELEGRAM_TOKEN, GEMINI_API_KEY yoki WEATHER_API_KEY topilmadi!")
     exit(1)
 
-# OpenAI API sozlamalari
-OPENAI_API_BASE_URL = "https://api.openai.com/v1/chat/completions"
-OPENAI_MODEL = "gpt-3.5-turbo"
-
-# OpenAI orqali matn generatsiya qilish funksiyasi
-async def openai_generate_content(prompt, max_tokens=500, temperature=0.7, retries=3, delay=5):
-    headers = {
-        "Authorization": f"Bearer {OPENAI_API_KEY}",
-        "Content-Type": "application/json",
-        "User-Agent": "TelegramBot/1.0"
-    }
-    data = {
-        "model": OPENAI_MODEL,
-        "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": max_tokens,
-        "temperature": temperature
-    }
-    for attempt in range(retries):
-        try:
-            logger.info(f"OpenAI API so‘rovi ({attempt + 1}/{retries}): {prompt[:50]}...")
-            response = requests.post(OPENAI_API_BASE_URL, headers=headers, json=data, timeout=15)
-            response.raise_for_status()
-            logger.info("OpenAI API javobi muvaffaqiyatli olingan.")
-            return response.json()["choices"][0]["message"]["content"]
-        except requests.exceptions.RequestException as e:
-            logger.error(f"OpenAI API xatoligi: {str(e)}, Status Code: {getattr(e.response, 'status_code', 'N/A')}")
-            if getattr(e.response, 'status_code', None) == 429 and attempt < retries - 1:
-                logger.info(f"429 xatoligi aniqlandi. {delay} soniya kutish va qayta urinish...")
-                await asyncio.sleep(delay)
-                delay *= 2  # Eksponensial orqa qadam
-            else:
-                if getattr(e.response, 'status_code', None) == 429:
-                    return "Xatolik: Juda ko‘p so‘rov. Iltimos, biroz kuting yoki obunani ko‘rib chiqing."
-                return f"Xatolik: {str(e)}"
-    return "Xatolik: Maksimal qayta urinishlar soniga yetildi."
+# Gemini sozlamalari
+genai.configure(api_key=GEMINI_API_KEY)
+model = genai.GenerativeModel("gemini-1.5-flash")
 
 # 🌤 O‘zbekiston shaharlar ro‘yxati
 UZ_CITIES = [
@@ -195,24 +164,14 @@ async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYP
     logger.info("Rasm yuklab olindi.")
 
     try:
-        base64_image = image_data.hex()  # Hex formatida aylantirish
+        base64_image = image_data.hex()
         headers = {
-            "Authorization": f"Bearer {OPENAI_API_KEY}",
-            "Content-Type": "application/json",
-            "User-Agent": "TelegramBot/1.0"
+            "Authorization": f"Bearer {GEMINI_API_KEY}",
+            "Content-Type": "application/json"
         }
         prompt = "Bu rasmni tahlil qiling va tavsiflang."
-        data = {
-            "model": "gpt-4o",  # OpenAI'da rasm tahlili uchun mos model
-            "messages": [{"role": "user", "content": [
-                {"type": "text", "text": prompt},
-                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
-            ]}],
-            "max_tokens": 500
-        }
-        response = requests.post(OPENAI_API_BASE_URL, headers=headers, json=data, timeout=15)
-        response.raise_for_status()
-        await update.message.reply_text(response.json()["choices"][0]["message"]["content"])
+        response = model.generate_content([prompt, {"mime_type": "image/jpeg", "data": base64_image}])
+        await update.message.reply_text(response.text)
     except Exception as e:
         logger.error(f"Rasm analizida xatolik: {str(e)}")
         await update.message.reply_text(f"Rasm analizida xatolik: {str(e)}")
@@ -223,7 +182,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     add_user(user_id, context)
 
     last_message_time = context.user_data.get("last_message_time", None)
-    if last_message_time and datetime.now() < last_message_time + timedelta(seconds=10):  # 5 soniyadan 10 soniyaga oshirildi
+    if last_message_time and datetime.now() < last_message_time + timedelta(seconds=10):
         await update.message.reply_text("⏳ Iltimos, 10 soniya kuting!")
         return
     context.user_data["last_message_time"] = datetime.now()
@@ -256,11 +215,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         prompt += "\n".join([f"Foydalanuvchi: {msg['user']}\nBot: {msg['bot']}" for msg in history])
         prompt += f"\nFoydalanuvchi: {text}\nBot: "
         try:
-            response_text = await openai_generate_content(prompt)
+            response = model.generate_content(prompt)
+            response_text = response.text
             update_chat_history(context, user_id, {"user": text, "bot": response_text})
             await update.message.reply_text(f"Javob: {response_text}")
         except Exception as e:
-            logger.error(f"OpenAI javobida xatolik: {str(e)}")
+            logger.error(f"Gemini javobida xatolik: {str(e)}")
             await update.message.reply_text(f"Xatolik: {str(e)}")
 
 # ---- Start va Help ----
@@ -357,7 +317,8 @@ async def translate_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = update.message.text
         try:
             prompt = f"Translate the following text into {lang}: {text}"
-            response_text = await openai_generate_content(prompt)
+            response = model.generate_content(prompt)
+            response_text = response.text
             await update.message.reply_text(f"🔤 Tarjima ({lang}): {response_text}")
             del context.user_data["target_lang"]
         except Exception as e:
@@ -441,7 +402,8 @@ async def handle_presentation_topic(update: Update, context: ContextTypes.DEFAUL
         
         prompt = f"Siz AI yordamchisiz. Quyidagi mavzu bo'yicha qisqa prezentatsiya matni yarating: {topic}. Strukturani quyidagi tarzda saqlang:\n- Sarlavha\n- Kirish (2-3 jumlali)\n- Asosiy qism (3 ta asosiy nuqta bilan)\n- Xulosa (1-2 jumlali)\nNatijani faqat matn sifatida qaytaring, hech qanday qo'shimcha izohsiz."
         try:
-            response_text = await openai_generate_content(prompt, max_tokens=1000)
+            response = model.generate_content(prompt)
+            response_text = response.text
             presentation_text = response_text.split('\n')
             logger.info(f"Generatsiya qilingan matn: {presentation_text}")
 
@@ -535,14 +497,6 @@ def main():
             webhook_url=webhook_url,
             allowed_updates=Update.ALL_TYPES
         )
-
-    # Scheduler ni botning loop'ida boshlash
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            loop.create_task(scheduler.start())
-    except RuntimeError:
-        logger.warning("Event loop allaqachon yopilgan yoki ishlamayapti.")
 
 if __name__ == "__main__":
     main()
