@@ -10,7 +10,6 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
-import google.generativeai as genai
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
 from deep_translator import GoogleTranslator
@@ -34,18 +33,38 @@ logger = logging.getLogger(__name__)
 # .env yuklash
 load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GROK_API_KEY = os.getenv("GROK_API_KEY")
 WEATHER_API_KEY = os.getenv("WEATHER_API_KEY")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 RENDER_EXTERNAL_HOSTNAME = os.getenv("RENDER_EXTERNAL_HOSTNAME")
 
-if not TELEGRAM_TOKEN or not GEMINI_API_KEY or not WEATHER_API_KEY:
-    logger.error("TELEGRAM_TOKEN, GEMINI_API_KEY yoki WEATHER_API_KEY topilmadi!")
+if not TELEGRAM_TOKEN or not GROK_API_KEY or not WEATHER_API_KEY:
+    logger.error("TELEGRAM_TOKEN, GROK_API_KEY yoki WEATHER_API_KEY topilmadi!")
     exit(1)
 
-# Gemini sozlamalari
-genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel("gemini-2.5-flash")  # Yangilangan model
+# Grok API sozlamalari
+GROK_API_BASE_URL = "https://api.x.ai/v1/chat/completions"
+GROK_MODEL = "grok-beta"
+
+# Grok orqali matn generatsiya qilish funksiyasi
+async def grok_generate_content(prompt, max_tokens=500, temperature=0.7):
+    headers = {
+        "Authorization": f"Bearer {GROK_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    data = {
+        "model": GROK_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": max_tokens,
+        "temperature": temperature
+    }
+    try:
+        response = requests.post(GROK_API_BASE_URL, headers=headers, json=data)
+        response.raise_for_status()
+        return response.json()["choices"][0]["message"]["content"]
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Grok API xatoligi: {str(e)}")
+        return f"Xatolik: {str(e)}"
 
 # 🌤 O‘zbekiston shaharlar ro‘yxati
 UZ_CITIES = [
@@ -164,9 +183,9 @@ async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYP
     logger.info("Rasm yuklab olindi.")
 
     try:
-        base64_image = image_data.hex()
+        image = {'mime_type': 'image/jpeg', 'data': image_data}
         prompt = "Bu rasmni tahlil qiling va tavsiflang."
-        response = model.generate_content([prompt, {"mime_type": "image/jpeg", "data": base64_image}])
+        response = await asyncio.to_thread(model.generate_content, [image, prompt])
         await update.message.reply_text(response.text)
     except Exception as e:
         logger.error(f"Rasm analizida xatolik: {str(e)}")
@@ -177,18 +196,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     add_user(user_id, context)
 
+    # Antispam
     last_message_time = context.user_data.get("last_message_time", None)
-    if last_message_time and datetime.now() < last_message_time + timedelta(seconds=10):
-        await update.message.reply_text("⏳ Iltimos, 10 soniya kuting!")
+    if last_message_time and datetime.now() < last_message_time + timedelta(seconds=5):
+        await update.message.reply_text("⏳ Iltimos, biroz kuting!")
         return
     context.user_data["last_message_time"] = datetime.now()
 
+    # Chat tarixini olish
     history = get_chat_history(context, user_id)
 
-    if update.message.text and "target_lang" not in context.user_data:
+    # Matnli xabar
+    if update.message.text:
         text = update.message.text
         logger.info(f"Matnli xabar: {text}")
         update_chat_history(context, user_id, {"user": text, "bot": ""})
+
+    # Ovozli xabar
     elif update.message.voice:
         voice = update.message.voice
         file = await context.bot.get_file(voice.file_id)
@@ -197,32 +221,32 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = speech_to_text(voice_data)
         await update.message.reply_text(f"Sizning ovozli xabaringiz: {text}")
         update_chat_history(context, user_id, {"user": text, "bot": ""})
+
+    # Rasmlar
     elif update.message.photo:
         await handle_photo_message(update, context)
         return
+
     else:
         await update.message.reply_text("Noma'lum xabar. Matn, ovoz yoki rasm yuboring.")
         return
 
-    if "target_lang" not in context.user_data:
-        user_id = update.effective_user.id
-        lang = context.user_data.get(user_id, {}).get("language", "uz")
-        prompt = f"Javobni {lang} tilida bering. Har qanday mavzuda yordam bering:\n"
-        prompt += "\n".join([f"Foydalanuvchi: {msg['user']}\nBot: {msg['bot']}" for msg in history])
-        prompt += f"\nFoydalanuvchi: {text}\nBot: "
-        try:
-            response = model.generate_content(prompt)
-            response_text = response.text
-            update_chat_history(context, user_id, {"user": text, "bot": response_text})
-            await update.message.reply_text(f"Javob: {response_text}")
-        except Exception as e:
-            logger.error(f"Gemini javobida xatolik: {str(e)}")
-            await update.message.reply_text(f"Xatolik: {str(e)}")
+    # AI javobini olish
+    response_text = await handle_visa_query(update, context, text, history)
+    update_chat_history(context, user_id, {"user": text, "bot": response_text})
+
+    # Javob turi
+    if update.message.voice:
+        audio_file = text_to_speech(response_text, lang="uz")
+        if audio_file:
+            await update.message.reply_voice(audio_file)
+    else:
+        await update.message.reply_text(f"Javob: {response_text}")
 
 # ---- Start va Help ----
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     add_user(update.effective_user.id, context)
-    await update.message.reply_text("Salom! Men AI yordamchiman 🤖. Har qanday savol bilan yordam beraman yoki /help ni ishlat.")
+    await update.message.reply_text("Salom! Men Vizabotman 🤖. Visa yordami uchun savollaringizni bering yoki /help ni ishlat.")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
@@ -232,8 +256,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/crypto - Kripto tanlab, narxini olish\n"
         "/translate - Tilni tanlab, tarjima qilish\n"
         "/currency - Bugungi valyuta kurslari (CBU)\n"
-        "/presentation - AI yordamida prezentatsiya tayyorlash\n"
-        "🤖 Har qanday savol uchun matn, ovoz yoki rasm yuboring – ketma-ket suhbatda javob beraman!\n"
+        "🤖 Visa yordami uchun matn, ovoz yoki rasm yuboring – ketma-ket suhbatda javob beraman!\n"
     )
     if update.effective_user.id == ADMIN_ID:
         text += (
@@ -250,7 +273,14 @@ async def myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ---- WEATHER ----
 async def weather_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [[InlineKeyboardButton(city, callback_data=f"weather_{city}")] for city in UZ_CITIES]
+    keyboard, row = [], []
+    for i, city in enumerate(UZ_CITIES, start=1):
+        row.append(InlineKeyboardButton(city, callback_data=f"weather_{city}"))
+        if i % 3 == 0:
+            keyboard.append(row)
+            row = []
+    if row:
+        keyboard.append(row)
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text("🌤 Qaysi shahar ob-havosini bilmoqchisiz?", reply_markup=reply_markup)
 
@@ -260,7 +290,7 @@ async def weather_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     city = query.data.replace("weather_", "")
     url = f"http://api.openweathermap.org/data/2.5/weather?q={city}&appid={WEATHER_API_KEY}&units=metric&lang=en"
     try:
-        res = requests.get(url, timeout=10).json()
+        res = requests.get(url).json()
         if res.get("cod") != 200:
             await query.edit_message_text(f"❌ Ob-havo topilmadi: {city}")
             return
@@ -284,7 +314,7 @@ async def crypto_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     coin = query.data.replace("crypto_", "")
     url = f"https://api.coingecko.com/api/v3/simple/price?ids={coin}&vs_currencies=usd"
     try:
-        res = requests.get(url, timeout=10).json()
+        res = requests.get(url).json()
         if coin not in res:
             await query.edit_message_text(f"❌ Kripto topilmadi: {coin}")
             return
@@ -330,7 +360,7 @@ async def translate_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def currency(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = "https://cbu.uz/oz/arkhiv-kursov-valyut/json/"
     try:
-        res = requests.get(url, timeout=10).json()
+        res = requests.get(url).json()
         if not res:
             await update.message.reply_text("❌ Valyuta kurslari topilmadi.")
             return
@@ -438,7 +468,6 @@ async def handle_presentation_topic(update: Update, context: ContextTypes.DEFAUL
             logger.info("PDF fayli muvaffaqiyatli yaratildi.")
 
             await update.message.reply_document(document=ppt_io, filename=f"{topic}_presentation.pptx")
-            await update.message.reply_document(document=pdf_io, filename=f"{topic}_presentation.pdf")
             await update.message.reply_text("🎉 Prezentatsiya PowerPoint (.pptx) va PDF formatida yuborildi!")
         except Exception as e:
             logger.error(f"Prezentatsiya yaratishda xatolik: {str(e)}")
