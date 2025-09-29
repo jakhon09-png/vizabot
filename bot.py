@@ -2,8 +2,12 @@ import json
 import sqlite3
 import os
 import asyncio
+import nest_asyncio
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
+
+# nest_asyncio ni qo'llash, Render muhitida event loop muammolarini hal qilish uchun
+nest_asyncio.apply()
 
 # Ma'lumotlar bazasini sozlash
 conn = sqlite3.connect('favorites.db')
@@ -190,14 +194,6 @@ async def main():
     await app.run_polling(allowed_updates=Update.ALL_TYPES)
     await app.shutdown()
 
-def run():
-    loop = asyncio.get_event_loop()
-    if loop.is_running():
-        # Joriy event loop ishlayotgan bo'lsa, yangi vazifa yaratish
-        loop.create_task(main())
-    else:
-        # Agar event loop ishlamasa, oddiy tarzda ishga tushirish
-        loop.run_until_complete(main())
-
 if __name__ == '__main__':
-    run()
+    # nest_asyncio tufayli asyncio.run() ga hojat yo'q
+    asyncio.get_event_loop().run_until_complete(main())
