@@ -1,6 +1,7 @@
 import json
 import sqlite3
 import os
+import asyncio
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
@@ -185,8 +186,18 @@ async def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, search_handler))
     
     # Botni polling rejimida ishga tushirish
+    await app.initialize()
     await app.run_polling(allowed_updates=Update.ALL_TYPES)
+    await app.shutdown()
+
+def run():
+    loop = asyncio.get_event_loop()
+    if loop.is_running():
+        # Joriy event loop ishlayotgan bo'lsa, yangi vazifa yaratish
+        loop.create_task(main())
+    else:
+        # Agar event loop ishlamasa, oddiy tarzda ishga tushirish
+        loop.run_until_complete(main())
 
 if __name__ == '__main__':
-    import asyncio
-    asyncio.run(main())
+    run()
