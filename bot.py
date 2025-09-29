@@ -1,6 +1,5 @@
 import os
 import json
-from flask import Flask, request
 from telegram import (
     Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
 )
@@ -10,16 +9,10 @@ from telegram.ext import (
 
 # === Config ===
 TOKEN = os.environ.get("BOT_TOKEN")
-APP_URL = os.environ.get("RENDER_EXTERNAL_URL")  # Render avtomatik beradi
+APP_URL = os.environ.get("RENDER_EXTERNAL_URL")  # Render URL
 PORT = int(os.environ.get("PORT", 5000))
 
-# === Flask app ===
-app = Flask(__name__)
-
-# === Telegram Application ===
-application = Application.builder().token(TOKEN).build()
-
-# Radiostations JSON yuklash
+# === Stations yuklash ===
 with open("stations.json", "r", encoding="utf-8") as f:
     stations = json.load(f)
 
@@ -56,7 +49,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-
     data = query.data
 
     if data == "country_uzbekistan":
@@ -85,21 +77,18 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if st["id"] == st_id:
                     await query.answer(f"✅ '{st['name']}' sevimlilarga qo'shildi!", show_alert=True)
 
-# === Handlerlarni ro'yxatdan o'tkazish ===
-application.add_handler(CommandHandler("start", start))
-application.add_handler(CallbackQueryHandler(button_callback))
+# === Asosiy run ===
+def main():
+    application = Application.builder().token(TOKEN).build()
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CallbackQueryHandler(button_callback))
 
-# === Flask route for webhook ===
-@app.route(f"/{TOKEN}", methods=["POST"])
-def webhook():
-    update = Update.de_json(request.get_json(force=True), application.bot)
-    application.update_queue.put_nowait(update)
-    return "OK", 200
-
-if __name__ == "__main__":
     application.run_webhook(
         listen="0.0.0.0",
         port=PORT,
         url_path=TOKEN,
         webhook_url=f"{APP_URL}/{TOKEN}"
     )
+
+if __name__ == "__main__":
+    main()
