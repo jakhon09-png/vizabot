@@ -9,10 +9,10 @@ from telegram.ext import (
 
 # === Config ===
 TOKEN = os.environ.get("BOT_TOKEN")
-APP_URL = os.environ.get("RENDER_EXTERNAL_URL")  # Render URL
-PORT = int(os.environ.get("PORT", 5000))
+APP_URL = os.environ.get("RENDER_EXTERNAL_URL")  # Render webhook URL beradi
+PORT = int(os.environ.get("PORT", 8443))
 
-# === Stations yuklash ===
+# === Radiolarni yuklash ===
 with open("stations.json", "r", encoding="utf-8") as f:
     stations = json.load(f)
 
@@ -77,12 +77,14 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if st["id"] == st_id:
                     await query.answer(f"✅ '{st['name']}' sevimlilarga qo'shildi!", show_alert=True)
 
-# === Asosiy run ===
+# === Main ===
 def main():
     application = Application.builder().token(TOKEN).build()
+
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CallbackQueryHandler(button_callback))
 
+    # Webhook usulida ishga tushirish
     application.run_webhook(
         listen="0.0.0.0",
         port=PORT,
