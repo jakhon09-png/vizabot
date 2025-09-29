@@ -1,199 +1,105 @@
-import json
-import sqlite3
 import os
-import asyncio
-import nest_asyncio
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
+import json
+from flask import Flask, request
+from telegram import (
+    Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
+)
+from telegram.ext import (
+    Application, CommandHandler, CallbackQueryHandler, ContextTypes
+)
 
-# nest_asyncio ni qo'llash, Render muhitida event loop muammolarini hal qilish uchun
-nest_asyncio.apply()
+# === Config ===
+TOKEN = os.environ.get("BOT_TOKEN")
+APP_URL = os.environ.get("RENDER_EXTERNAL_URL")  # Render avtomatik beradi
+PORT = int(os.environ.get("PORT", 5000))
 
-# Ma'lumotlar bazasini sozlash
-conn = sqlite3.connect('favorites.db')
-conn.execute('''CREATE TABLE IF NOT EXISTS favorites
-             (user_id INTEGER, station_id TEXT)''')
-conn.commit()
+# === Flask app ===
+app = Flask(__name__)
 
-# stations.json faylini yuklash
-with open('stations.json', 'r') as f:
+# === Telegram Application ===
+application = Application.builder().token(TOKEN).build()
+
+# Radiostations JSON yuklash
+with open("stations.json", "r", encoding="utf-8") as f:
     stations = json.load(f)
 
-# Boshlang'ich menyu tugmalari
+# === Keyboardlar ===
 def main_menu_keyboard():
-    keyboard = [
-        [InlineKeyboardButton("🇺🇿 O'zbekiston Radiolari", callback_data='country_uzbekistan_page_0')],
-        [InlineKeyboardButton("🇷🇺 Rossiya Radiolari", callback_data='country_russia_page_0')],
-        [InlineKeyboardButton("❤️ Sevimlilar", callback_data='favorites')],
-        [InlineKeyboardButton("🔍 Qidiruv", callback_data='search')],
-    ]
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🇺🇿 O'zbekiston Radiolari", callback_data="country_uzbekistan")],
+        [InlineKeyboardButton("🇷🇺 Rossiya Radiolari", callback_data="country_russia")],
+        [InlineKeyboardButton("❤️ Sevimlilar", callback_data="favorites")],
+        [InlineKeyboardButton("🔍 Qidiruv", callback_data="search")]
+    ])
+
+def stations_keyboard(country):
+    keyboard = []
+    for st in stations.get(country, []):
+        keyboard.append([InlineKeyboardButton(st["name"], callback_data=f"station_{st['id']}")])
+    keyboard.append([InlineKeyboardButton("⬅️ Ortga", callback_data="back_main")])
     return InlineKeyboardMarkup(keyboard)
 
-# Stansiyalar ro'yxatini sahifalab chiqarish
-def get_stations_keyboard(country, page=0, query=None):
-    if query:
-        all_st = stations.get('uzbekistan', []) + stations.get('russia', [])
-        st_list = [s for s in all_st if query.lower() in s['name'].lower()]
-    else:
-        st_list = stations.get(country, [])
-    
-    per_page = 5
-    start = page * per_page
-    end = start + per_page
-    keyboard = [[InlineKeyboardButton(s['name'], callback_data=f"station_{s['id']}")] for s in st_list[start:end]]
-    
-    nav = []
-    if page > 0:
-        prev_data = f"search_page_{page-1}_{query}" if query else f"country_{country}_page_{page-1}"
-        nav.append(InlineKeyboardButton("⬅️ Oldingi", callback_data=prev_data))
-    if end < len(st_list):
-        next_data = f"search_page_{page+1}_{query}" if query else f"country_{country}_page_{page+1}"
-        nav.append(InlineKeyboardButton("Keyingi ➡️", callback_data=next_data))
-    
-    if nav:
-        keyboard.append(nav)
-    
-    back_data = 'main_menu' if not query else 'main_menu'
-    keyboard.append([InlineKeyboardButton("⬅️ Asosiy menyuga", callback_data=back_data)])
-    
-    return InlineKeyboardMarkup(keyboard)
+def station_menu(station):
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("▶️ Tinglash", url=station["stream_url"])],
+        [InlineKeyboardButton("❤️ Sevimliga qo'shish", callback_data=f"fav_{station['id']}")],
+        [InlineKeyboardButton("⬅️ Ortga", callback_data=f"country_{station['id'].split('_')[0]}")]
+    ])
 
-# Sevimlilar ro'yxati
-def get_favorites_keyboard(user_id, page=0):
-    cur = conn.execute('SELECT station_id FROM favorites WHERE user_id=?', (user_id,))
-    fav_ids = [row[0] for row in cur.fetchall()]
-    
-    all_st = stations.get('uzbekistan', []) + stations.get('russia', [])
-    fav_st = [s for s in all_st if s['id'] in fav_ids]
-    
-    per_page = 5
-    start = page * per_page
-    end = start + per_page
-    keyboard = [[InlineKeyboardButton(s['name'], callback_data=f"station_{s['id']}")] for s in fav_st[start:end]]
-    
-    nav = []
-    if page > 0:
-        nav.append(InlineKeyboardButton("⬅️ Oldingi", callback_data=f"favorites_page_{page-1}"))
-    if end < len(fav_st):
-        nav.append(InlineKeyboardButton("Keyingi ➡️", callback_data=f"favorites_page_{page+1}"))
-    
-    if nav:
-        keyboard.append(nav)
-    
-    keyboard.append([InlineKeyboardButton("⬅️ Asosiy menyuga", callback_data='main_menu')])
-    
-    return InlineKeyboardMarkup(keyboard)
-
-# Stansiya haqida ma'lumot chiqarish
-def get_station_menu(station, country):
-    keyboard = [
-        [InlineKeyboardButton("▶️ Tinglash", url=station['stream_url'])],
-        [InlineKeyboardButton("❤️ Sevimliga qo'shish", callback_data=f"add_fav_{station['id']}")],
-        [InlineKeyboardButton("⬅️ Ortga", callback_data=f"country_{country}_page_0")],
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
-# /start buyrug'i
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+# === Handlers ===
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        'Assalomu alaykum! 👋\n\n'
-        'Radiolar Olami botiga xush kelibsiz! Marhamat, mamlakatni tanlang:',
+        "👋 Assalomu alaykum!\nRadiolar Olamiga xush kelibsiz!",
         reply_markup=main_menu_keyboard()
     )
 
-# Tugma bosilganda
-async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+
     data = query.data
-    user_id = query.from_user.id
-    
-    if data == 'main_menu':
-        await query.edit_message_text(
-            text="Asosiy menyu:",
-            reply_markup=main_menu_keyboard()
-        )
-        return
-    
-    if data.startswith('country_'):
-        parts = data.split('_')
-        country = parts[1]
-        page = int(parts[3]) if len(parts) > 3 else 0
-        await query.edit_message_text(
-            text=f"{country.capitalize()} radiostansiyalari:",
-            reply_markup=get_stations_keyboard(country, page)
-        )
-    
-    elif data.startswith('station_'):
-        station_id = data.split('_')[1]
-        all_st = stations.get('uzbekistan', []) + stations.get('russia', [])
-        station = next((s for s in all_st if s['id'] == station_id), None)
-        if station:
-            country = 'uzbekistan' if station_id.startswith('uz_') else 'russia'
-            text = f"Siz '{station['name']}' radiosini tanladingiz."
-            await query.edit_message_text(text=text, reply_markup=get_station_menu(station, country))
-    
-    elif data.startswith('add_fav_'):
-        station_id = data.split('_')[2]
-        conn.execute('INSERT OR IGNORE INTO favorites (user_id, station_id) VALUES (?, ?)', (user_id, station_id))
-        conn.commit()
-        await query.answer("✅ Sevimlilaringizga qo'shildi!", show_alert=True)
-    
-    elif data == 'favorites':
-        await query.edit_message_text(
-            text="Sevimli radiostansiyalaringiz:",
-            reply_markup=get_favorites_keyboard(user_id)
-        )
-    
-    elif data.startswith('favorites_page_'):
-        page = int(data.split('_')[2])
-        await query.edit_message_text(
-            text="Sevimli radiostansiyalaringiz:",
-            reply_markup=get_favorites_keyboard(user_id, page)
-        )
-    
-    elif data == 'search':
-        context.user_data['search_mode'] = True
-        await query.edit_message_text(text="Qidiruv so'zini kiriting (masalan, stansiya nomi):")
 
-    elif data.startswith('search_page_'):
-        parts = data.split('_')
-        page = int(parts[2])
-        query_str = '_'.join(parts[3:])
-        await query.edit_message_text(
-            text=f"Qidiruv natijalari '{query_str}':",
-            reply_markup=get_stations_keyboard(None, page, query_str)
-        )
+    if data == "country_uzbekistan":
+        await query.edit_message_text("🇺🇿 O'zbekiston radiolari:", reply_markup=stations_keyboard("uzbekistan"))
 
-# Qidiruv uchun matn xabarlarni qayta ishlash
-async def search_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if context.user_data.get('search_mode'):
-        query = update.message.text.strip()
-        context.user_data['search_mode'] = False
-        await update.message.reply_text(
-            text=f"Qidiruv natijalari '{query}':",
-            reply_markup=get_stations_keyboard(None, 0, query)
-        )
+    elif data == "country_russia":
+        await query.edit_message_text("🇷🇺 Rossiya radiolari:", reply_markup=stations_keyboard("russia"))
 
-async def main():
-    # Bot tokenini environment variable'dan olish
-    TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-    if not TOKEN:
-        raise ValueError("TELEGRAM_BOT_TOKEN environment variable not set")
-    
-    # Application yaratish
-    app = Application.builder().token(TOKEN).build()
-    
-    # Handler'larni qo'shish
-    app.add_handler(CommandHandler('start', start))
-    app.add_handler(CallbackQueryHandler(button_callback))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, search_handler))
-    
-    # Botni polling rejimida ishga tushirish
-    await app.initialize()
-    await app.run_polling(allowed_updates=Update.ALL_TYPES)
-    await app.shutdown()
+    elif data.startswith("station_"):
+        st_id = data.replace("station_", "")
+        for country, lst in stations.items():
+            for st in lst:
+                if st["id"] == st_id:
+                    await query.edit_message_media(
+                        media=InputMediaPhoto(media=st["logo"], caption=f"Siz '{st['name']}' radiosini tanladingiz."),
+                        reply_markup=station_menu(st)
+                    )
 
-if __name__ == '__main__':
-    # nest_asyncio tufayli asyncio.run() ga hojat yo'q
-    asyncio.get_event_loop().run_until_complete(main())
+    elif data == "back_main":
+        await query.edit_message_text("🏠 Asosiy menyu:", reply_markup=main_menu_keyboard())
+
+    elif data.startswith("fav_"):
+        st_id = data.replace("fav_", "")
+        for country, lst in stations.items():
+            for st in lst:
+                if st["id"] == st_id:
+                    await query.answer(f"✅ '{st['name']}' sevimlilarga qo'shildi!", show_alert=True)
+
+# === Handlerlarni ro'yxatdan o'tkazish ===
+application.add_handler(CommandHandler("start", start))
+application.add_handler(CallbackQueryHandler(button_callback))
+
+# === Flask route for webhook ===
+@app.route(f"/{TOKEN}", methods=["POST"])
+def webhook():
+    update = Update.de_json(request.get_json(force=True), application.bot)
+    application.update_queue.put_nowait(update)
+    return "OK", 200
+
+if __name__ == "__main__":
+    application.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        url_path=TOKEN,
+        webhook_url=f"{APP_URL}/{TOKEN}"
+    )
