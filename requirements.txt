@@ -1,1 +1,2 @@
-python-telegram-bot[webhooks]==20.6
+python-telegram-bot==21.4
+nest_asyncio==1.6.0
