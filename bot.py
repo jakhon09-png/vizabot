@@ -2,9 +2,8 @@ import json
 import sqlite3
 import os
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, InputMediaPhoto
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, Filters, ContextTypes
-import asyncio
-from http import HTTPStatus
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes
+from telegram.ext import filters  # Yangi filters moduli
 
 # Ma'lumotlar bazasini sozlash
 conn = sqlite3.connect('favorites.db')
@@ -188,10 +187,11 @@ async def main() -> None:
     # Handler'larni qo'shish
     application.add_handler(CommandHandler('start', start))
     application.add_handler(CallbackQueryHandler(button_callback))
-    application.add_handler(MessageHandler(Filters.text & ~Filters.command, search_handler))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, search_handler))  # Filters o'rniga filters.TEXT
     
     # Botni ishga tushirish
     await application.run_polling()
 
 if __name__ == '__main__':
+    import asyncio
     asyncio.run(main())
