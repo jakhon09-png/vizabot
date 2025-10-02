@@ -1,67 +1,79 @@
-import logging
-from aiogram import Bot, Dispatcher, types
-from aiogram.utils import executor
-import google.generativeai as genai
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackQueryHandler
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+import whisper
 import os
-import tempfile
+import translators as ts
 
-logging.basicConfig(level=logging.INFO)
+# Whisper modelini yuklash (tiny modeli resurs tejaydi)
+model = whisper.load_model("tiny")
 
-# Render.com Environment Variables
-API_TOKEN = os.getenv("BOT_TOKEN")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+def start(update, context):
+    update.message.reply_text("Salom! Men tarjimon botman. Ovozli xabar yuboring yoki matn kiriting.")
 
-bot = Bot(token=API_TOKEN)
-dp = Dispatcher(bot)
+def help_command(update, context):
+    update.message.reply_text("Ovozli xabar yoki matn yuboring, men uni ingliz, rus, fransuz, italyan, xitoy va o‘zbek tillariga tarjima qilaman. Tillarni tanlash uchun /translate buyrug‘ini ishlatishingiz mumkin.")
 
-genai.configure(api_key=GEMINI_API_KEY)
+def voice_to_text(file_path):
+    try:
+        result = model.transcribe(file_path)
+        return result["text"]
+    except Exception as e:
+        return f"Xatolik: Ovozli xabarni matnga aylantirishda muammo: {str(e)}"
 
-# Gemini modeli
-model = genai.GenerativeModel("gemini-1.5-pro")
+def translate_text(text, dest_lang):
+    try:
+        return ts.translate_text(text, to_language=dest_lang)
+    except Exception as e:
+        return f"Xatolik: Tarjimada muammo: {str(e)}"
 
-# Ovozdan matnga o‘tkazish
-async def speech_to_text(file_path):
-    with open(file_path, "rb") as f:
-        response = model.generate_content([f, "Ushbu audio faylni matnga aylantir."])
-    return response.text
+def handle_voice(update, context):
+    try:
+        voice_file = update.message.voice.get_file()
+        voice_file.download("voice.ogg")
+        text = voice_to_text("voice.ogg")
+        update.message.reply_text(f"Ovozli xabar matni: {text}")
+        context.user_data['last_text'] = text
+        os.remove("voice.ogg")  # Vaqtinchalik faylni o‘chirish
+    except Exception as e:
+        update.message.reply_text(f"Xatolik: {str(e)}")
 
-# Tarjima qilish
-def translate_text(text, target_lang):
-    prompt = f"Quyidagi matnni {target_lang} tiliga tarjima qil: \n\n{text}"
-    response = model.generate_content(prompt)
-    return response.text
+def handle_text(update, context):
+    text = update.message.text or context.user_data.get('last_text', 'Salom')
+    langs = ['en', 'ru', 'fr', 'it', 'zh', 'uz']
+    translations = {lang: translate_text(text, lang) for lang in langs}
+    response = "\n".join([f"{lang.upper()}: {trans}" for lang, trans in translations.items()])
+    update.message.reply_text(response)
 
-@dp.message_handler(content_types=types.ContentType.VOICE)
-async def handle_voice(message: types.Message):
-    file_id = message.voice.file_id
-    file = await bot.get_file(file_id)
-    file_path = file.file_path
-    downloaded = await bot.download_file(file_path)
+def language_selection(update, context):
+    keyboard = [
+        [InlineKeyboardButton("Ingliz", callback_data='en'),
+         InlineKeyboardButton("Rus", callback_data='ru')],
+        [InlineKeyboardButton("Fransuz", callback_data='fr'),
+         InlineKeyboardButton("Italya", callback_data='it')],
+        [InlineKeyboardButton("Xitoy", callback_data='zh'),
+         InlineKeyboardButton("O‘zbek", callback_data='uz')]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    update.message.reply_text("Qaysi tilga tarjima qilmoqchisiz?", reply_markup=reply_markup)
 
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".ogg") as temp_audio:
-        temp_audio.write(downloaded.read())
-        temp_path = temp_audio.name
+def button(update, context):
+    query = update.callback_query
+    lang = query.data
+    text = context.user_data.get('last_text', 'Salom')
+    translation = translate_text(text, lang)
+    query.message.reply_text(f"{lang.upper()}: {translation}")
 
-    text = await speech_to_text(temp_path)
-    await message.reply(f"📄 Matn: {text}")
+def main():
+    updater = Updater("YOUR_BOT_TOKEN", use_context=True)
+    dp = updater.dispatcher
+    dp.add_handler(CommandHandler("start", start))
+    dp.add_handler(CommandHandler("help", help_command))
+    dp.add_handler(CommandHandler("translate", language_selection))
+    dp.add_handler(MessageHandler(Filters.voice, handle_voice))
+    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_text))
+    dp.add_handler(CallbackQueryHandler(button))
+    updater.start_polling()
+    updater.idle()
 
-    languages = {
-        "Inglizcha": "ingliz",
-        "Ruscha": "rus",
-        "Fransuzcha": "fransuz",
-        "Italyancha": "italyan",
-        "Xitoycha": "xitoy"
-    }
-
-    for name, lang in languages.items():
-        translated = translate_text(text, lang)
-        await message.reply(f"🌍 {name}:\n{translated}")
-
-@dp.message_handler(content_types=types.ContentType.TEXT)
-async def handle_text(message: types.Message):
-    text = message.text
-    translated = translate_text(text, "o‘zbek")
-    await message.reply(f"🇺🇿 O‘zbekcha:\n{translated}")
-
-if __name__ == "__main__":
-    executor.start_polling(dp, skip_updates=True)
+if __name__ == '__main__':
+    main()
