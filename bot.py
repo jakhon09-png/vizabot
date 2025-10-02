@@ -9,7 +9,11 @@ import logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Whisper modelini yuklash (tiny modeli Render’ning 512 MB RAM uchun mos)
-model = whisper.load_model("tiny")
+try:
+    model = whisper.load_model("tiny")
+except Exception as e:
+    logging.error(f"Whisper modelini yuklashda xato: {str(e)}")
+    model = None
 
 def start(update, context):
     update.message.reply_text("Salom! Men tarjimon botman. Ovozli xabar yuboring yoki matn kiriting.")
@@ -18,6 +22,8 @@ def help_command(update, context):
     update.message.reply_text("Ovozli xabar yoki matn yuboring, men uni ingliz, rus, fransuz, italyan, xitoy va o‘zbek tillariga tarjima qilaman. Tillarni tanlash uchun /translate buyrug‘ini ishlatishingiz mumkin.")
 
 def voice_to_text(file_path):
+    if model is None:
+        return "Xatolik: Whisper modeli yuklanmadi."
     try:
         result = model.transcribe(file_path)
         return result["text"]
@@ -72,16 +78,19 @@ def button(update, context):
     query.message.reply_text(f"{lang.upper()}: {translation}")
 
 def main():
-    updater = Updater("YOUR_BOT_TOKEN", use_context=True)
-    dp = updater.dispatcher
-    dp.add_handler(CommandHandler("start", start))
-    dp.add_handler(CommandHandler("help", help_command))
-    dp.add_handler(CommandHandler("translate", language_selection))
-    dp.add_handler(MessageHandler(Filters.voice, handle_voice))
-    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_text))
-    dp.add_handler(CallbackQueryHandler(button))
-    updater.start_polling()
-    updater.idle()
+    try:
+        updater = Updater("YOUR_BOT_TOKEN", use_context=True)
+        dp = updater.dispatcher
+        dp.add_handler(CommandHandler("start", start))
+        dp.add_handler(CommandHandler("help", help_command))
+        dp.add_handler(CommandHandler("translate", language_selection))
+        dp.add_handler(MessageHandler(Filters.voice, handle_voice))
+        dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_text))
+        dp.add_handler(CallbackQueryHandler(button))
+        updater.start_polling()
+        updater.idle()
+    except Exception as e:
+        logging.error(f"Botni ishga tushirishda xato: {str(e)}")
 
 if __name__ == '__main__':
     main()
