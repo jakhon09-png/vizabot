@@ -3,8 +3,12 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 import whisper
 import os
 import translators as ts
+import logging
 
-# Whisper modelini yuklash (tiny modeli resurs tejaydi)
+# Loglarni sozlash
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# Whisper modelini yuklash (tiny modeli Render’ning 512 MB RAM uchun mos)
 model = whisper.load_model("tiny")
 
 def start(update, context):
@@ -18,16 +22,19 @@ def voice_to_text(file_path):
         result = model.transcribe(file_path)
         return result["text"]
     except Exception as e:
+        logging.error(f"Ovozli xabarni matnga aylantirishda xato: {str(e)}")
         return f"Xatolik: Ovozli xabarni matnga aylantirishda muammo: {str(e)}"
 
 def translate_text(text, dest_lang):
     try:
         return ts.translate_text(text, to_language=dest_lang)
     except Exception as e:
+        logging.error(f"Tarjimada xato: {str(e)}")
         return f"Xatolik: Tarjimada muammo: {str(e)}"
 
 def handle_voice(update, context):
     try:
+        update.message.reply_text("Iltimos, aniq va ravon gapiring.")
         voice_file = update.message.voice.get_file()
         voice_file.download("voice.ogg")
         text = voice_to_text("voice.ogg")
@@ -35,6 +42,7 @@ def handle_voice(update, context):
         context.user_data['last_text'] = text
         os.remove("voice.ogg")  # Vaqtinchalik faylni o‘chirish
     except Exception as e:
+        logging.error(f"Ovozli xabarni qayta ishlashda xato: {str(e)}")
         update.message.reply_text(f"Xatolik: {str(e)}")
 
 def handle_text(update, context):
