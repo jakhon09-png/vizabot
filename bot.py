@@ -1,97 +1,67 @@
+import logging
+from aiogram import Bot, Dispatcher, types
+from aiogram.utils import executor
+import google.generativeai as genai
 import os
-import asyncio
-import nest_asyncio
-import requests
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
-from telegram.constants import ParseMode
+import tempfile
 
-# nest_asyncio ni qo'llash
-nest_asyncio.apply()
+logging.basicConfig(level=logging.INFO)
 
-# API kalitlari
-SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
-SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
+# Render.com Environment Variables
+API_TOKEN = os.getenv("BOT_TOKEN")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# Spotify token olish
-def get_spotify_token():
-    url = "https://accounts.spotify.com/api/token"
-    headers = {"Authorization": f"Basic {requests.auth._basic_auth_str(SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET)}"}
-    data = {"grant_type": "client_credentials"}
-    response = requests.post(url, headers=headers, data=data)
-    if response.status_code == 200:
-        return response.json()["access_token"]
-    return None
+bot = Bot(token=API_TOKEN)
+dp = Dispatcher(bot)
 
-# Spotify qidirish
-async def search_spotify(query):
-    token = get_spotify_token()
-    if not token:
-        return "Spotify API kaliti noto'g'ri. Iltimos, sozlang."
-    url = f"https://api.spotify.com/v1/search?q={query}&type=track&limit=5"
-    headers = {"Authorization": f"Bearer {token}"}
-    response = requests.get(url, headers=headers)
-    if response.status_code == 200:
-        data = response.json()
-        tracks = data.get('tracks', {}).get('items', [])
-        if tracks:
-            text = "🎵 **Natijalar**:\n"
-            for track in tracks:
-                artist = track['artists'][0]['name']
-                name = track['name']
-                preview = track['preview_url'] or "Preview yo'q"
-                text += f"**{name}** - {artist}\n[Preview]({preview})\n\n"
-            return text
-        return "Hech narsa topilmadi."
-    return "Qidirishda xato yuz berdi."
+genai.configure(api_key=GEMINI_API_KEY)
 
-# Boshlang'ich menyu
-def main_menu_keyboard():
-    keyboard = [
-        [InlineKeyboardButton("🎵 Nom bo'yicha qidirish", callback_data='search_music')],
-    ]
-    return InlineKeyboardMarkup(keyboard)
+# Gemini modeli
+model = genai.GenerativeModel("gemini-1.5-pro")
 
-# Handlers
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text(
-        'Assalomu alaykum! 👋\n\n'
-        'Spotify orqali musiqa qidirish botiga xush kelibsiz! Musiqa nomini kiriting:',
-        reply_markup=main_menu_keyboard()
-    )
+# Ovozdan matnga o‘tkazish
+async def speech_to_text(file_path):
+    with open(file_path, "rb") as f:
+        response = model.generate_content([f, "Ushbu audio faylni matnga aylantir."])
+    return response.text
 
-async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
-    await query.answer()
-    data = query.data
-    
-    if data == 'search_music':
-        context.user_data['spotify_search'] = True
-        await query.edit_message_text("Musiqa nomini kiriting (masalan, 'Xamdam Sobirov - Malohat'):")
+# Tarjima qilish
+def translate_text(text, target_lang):
+    prompt = f"Quyidagi matnni {target_lang} tiliga tarjima qil: \n\n{text}"
+    response = model.generate_content(prompt)
+    return response.text
 
-async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    text = update.message.text
-    
-    if text and context.user_data.get('spotify_search'):
-        context.user_data['spotify_search'] = False
-        result = await search_spotify(text)
-        await update.message.reply_text(result, parse_mode=ParseMode.MARKDOWN)
-        await update.message.reply_text("Yana qidirish uchun /start", reply_markup=main_menu_keyboard())
+@dp.message_handler(content_types=types.ContentType.VOICE)
+async def handle_voice(message: types.Message):
+    file_id = message.voice.file_id
+    file = await bot.get_file(file_id)
+    file_path = file.file_path
+    downloaded = await bot.download_file(file_path)
 
-async def main():
-    TOKEN = os.getenv("BOT_TOKEN")
-    if not TOKEN:
-        raise ValueError("BOT_TOKEN sozlanmagan")
-    
-    app = Application.builder().token(TOKEN).build()
-    
-    app.add_handler(CommandHandler('start', start))
-    app.add_handler(CallbackQueryHandler(button_callback))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
-    
-    await app.initialize()
-    await app.run_polling(allowed_updates=Update.ALL_TYPES)
-    await app.shutdown()
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".ogg") as temp_audio:
+        temp_audio.write(downloaded.read())
+        temp_path = temp_audio.name
 
-if __name__ == '__main__':
-    asyncio.run(main())
+    text = await speech_to_text(temp_path)
+    await message.reply(f"📄 Matn: {text}")
+
+    languages = {
+        "Inglizcha": "ingliz",
+        "Ruscha": "rus",
+        "Fransuzcha": "fransuz",
+        "Italyancha": "italyan",
+        "Xitoycha": "xitoy"
+    }
+
+    for name, lang in languages.items():
+        translated = translate_text(text, lang)
+        await message.reply(f"🌍 {name}:\n{translated}")
+
+@dp.message_handler(content_types=types.ContentType.TEXT)
+async def handle_text(message: types.Message):
+    text = message.text
+    translated = translate_text(text, "o‘zbek")
+    await message.reply(f"🇺🇿 O‘zbekcha:\n{translated}")
+
+if __name__ == "__main__":
+    executor.start_polling(dp, skip_updates=True)
